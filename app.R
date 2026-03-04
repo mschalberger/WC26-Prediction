@@ -284,9 +284,9 @@ ui <- fluidPage(
         --lime:   #7EC820;
         --navy:   #1A5276;
         --red:    #C8102E;
-        --dark:   #0A0A0F;
-        --panel:  #12121A;
-        --border: #2A2A3A;
+        --dark:   #1A1A26;   /* was #12121A */
+        --panel:  #22223A;   /* was #1A1A26 */
+        --border: #32324A;
         --text:   #E8E8F0;
         --muted:  #6B6B80;
         --green:  #00C853;
@@ -300,7 +300,7 @@ ui <- fluidPage(
 
       /* ── HEADER ── */
       .wc-header {
-        background: linear-gradient(135deg, #0A0A0F 0%, #0A1020 50%, #0A0A0F 100%);
+      background: linear-gradient(135deg, #1A1A26 0%, #1A2030 50%, #1A1A26 100%);
         border-bottom: 3px solid var(--lime);
         padding: 20px 40px; position: relative; overflow: hidden;
       }
@@ -495,8 +495,14 @@ ui <- fluidPage(
               p(class="wc-subtitle", "ELO-Based Monte Carlo Simulator"),
               h1(class="wc-title", "🏆 FIFA World Cup 2026")
           ),
-          tags$img(src="https://www.stat.fu-berlin.de/_media/fustat-en.png?width=500",
-                   class="fustat-logo", alt="fu:stat")
+          div(style="display:flex; align-items:center; gap:20px;",
+          tags$img(src="StuKoLogoDark_Trans.png",
+                   class="fustat-logo", alt="StuKo",
+                   style="height:55px;"),
+          tags$img(src="FUstatWhiteOnGreen.svg",
+                   class="fustat-logo", alt="StuKo",
+                   style="height:55px;"),
+      )
       )
   ),
 
