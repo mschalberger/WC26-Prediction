@@ -1,4 +1,5 @@
 library(devtools)
+library(worldcup)
 devtools::install_github("jfjelstul/worldcup")
 devtools::install_github("JaseZiv/worldfootballR")
 
@@ -6,4 +7,5 @@ devtools::install_github("JaseZiv/worldfootballR")
 data <- worldcup::matches
 
 #no penalties
+library(worldfootballR)
 world_cups <- load_match_comp_results(comp_name = "FIFA World Cup")
