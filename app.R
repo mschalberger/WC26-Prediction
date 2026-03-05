@@ -93,7 +93,7 @@ simulate_match <- function(elo_home, elo_away, k=20) {
 # ── GROUP STAGE ──────────────────────────────────────────────
 
 run_group_stage <- function(teams_df, k=20) {
-  elo_start <- setNames(teams_df$elo, teams_df$id)  # pre-tournament snapshot (for ELO change display)
+  elo_start <- setNames(teams_df$elo, teams_df$id)
   elo_live  <- elo_start
 
   all_matches   <- data.frame()
@@ -112,7 +112,6 @@ run_group_stage <- function(teams_df, k=20) {
 
       res <- simulate_match(elo_h, elo_a, k=k)
 
-      # Always update live ELO (used in standings/rankings display)
       elo_live[as.character(h)] <- res$new_elo_home
       elo_live[as.character(a)] <- res$new_elo_away
 
@@ -259,7 +258,7 @@ run_tournament <- function(seed=NULL, k=20) {
   ) %>%
     left_join(teams_df %>% select(id, team_name, fifa_code, elo), by="id") %>%
     mutate(
-      change    = round(final_elo - elo),   # both unrounded → change is exact
+      change    = round(final_elo - elo),
       final_elo = round(final_elo),
       start_elo = round(elo),
       flag      = sapply(fifa_code, get_flag)
@@ -279,30 +278,63 @@ ui <- fluidPage(
   tags$head(
     tags$link(href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;600&display=swap", rel="stylesheet"),
     tags$style(HTML("
+      /* ══ DARK MODE (default) ══ */
       :root {
         --gold:   #F5C518;
         --lime:   #7EC820;
         --navy:   #1A5276;
         --red:    #C8102E;
-        --dark:   #1A1A26;   /* was #12121A */
-        --panel:  #22223A;   /* was #1A1A26 */
+        --dark:   #1A1A26;
+        --panel:  #22223A;
         --border: #32324A;
         --text:   #E8E8F0;
         --muted:  #6B6B80;
         --green:  #00C853;
         --blue:   #2979FF;
+        --input-bg: #1C1C2A;
+        --group-card-bg: #0E0E18;
+        --group-header-bg: rgba(26,82,118,0.35);
+        --qualify-bg: rgba(0,200,83,0.08);
+        --qualify3-bg: rgba(41,121,255,0.06);
+        --ko-border: rgba(255,255,255,0.04);
+        --elo-bar-bg: rgba(255,255,255,0.05);
+        --rank4-bg: rgba(255,255,255,0.05);
+        --rank3-bg: rgba(41,121,255,0.3);
       }
+
+      /* ══ LIGHT MODE ══ */
+      body.light-mode {
+        --dark:   #F0F2F5;
+        --panel:  #FFFFFF;
+        --border: #D0D4DC;
+        --text:   #1A1A2E;
+        --muted:  #6B7280;
+        --input-bg: #F8F9FB;
+        --group-card-bg: #F8F9FB;
+        --group-header-bg: rgba(26,82,118,0.08);
+        --qualify-bg: rgba(0,150,60,0.07);
+        --qualify3-bg: rgba(41,121,255,0.07);
+        --ko-border: rgba(0,0,0,0.06);
+        --elo-bar-bg: rgba(0,0,0,0.07);
+        --rank4-bg: rgba(0,0,0,0.06);
+        --rank3-bg: rgba(41,121,255,0.15);
+      }
+
       * { box-sizing: border-box; }
       body {
         background: var(--dark); color: var(--text);
         font-family: 'Inter', sans-serif; font-size: 14px; margin: 0; padding: 0;
+        transition: background 0.3s, color 0.3s;
       }
 
       /* ── HEADER ── */
       .wc-header {
-      background: linear-gradient(135deg, #1A1A26 0%, #1A2030 50%, #1A1A26 100%);
+        background: linear-gradient(135deg, #1A2235 0%, #1C2D4A 50%, #1A2235 100%);
         border-bottom: 3px solid var(--lime);
         padding: 20px 40px; position: relative; overflow: hidden;
+      }
+      body.light-mode .wc-header {
+        background: linear-gradient(135deg, #1C2D4A 0%, #203860 50%, #1C2D4A 100%);
       }
       .wc-header::before {
         content: ''; position: absolute; inset: 0;
@@ -317,7 +349,7 @@ ui <- fluidPage(
         text-shadow: 0 0 40px rgba(126,200,32,0.35);
       }
       .wc-subtitle {
-        color: var(--muted); font-size: 12px; font-weight: 300;
+        color: rgba(200,200,220,0.7); font-size: 12px; font-weight: 300;
         letter-spacing: 3px; text-transform: uppercase; margin-top: 4px;
       }
       .header-inner {
@@ -332,6 +364,35 @@ ui <- fluidPage(
       }
       .fustat-logo:hover { opacity: 1; filter: drop-shadow(0 0 14px rgba(126,200,32,0.55)); }
 
+      /* ── THEME TOGGLE ── */
+      .theme-toggle {
+        display: flex; align-items: center; gap: 10px;
+        background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+        border-radius: 24px; padding: 6px 14px; cursor: pointer;
+        transition: background 0.2s, border-color 0.2s;
+        user-select: none;
+      }
+      .theme-toggle:hover { background: rgba(255,255,255,0.14); }
+      .toggle-label {
+        font-family: 'Bebas Neue', sans-serif; font-size: 14px;
+        letter-spacing: 2px; color: rgba(220,220,240,0.85);
+      }
+      .toggle-track {
+        position: relative; width: 42px; height: 22px;
+        background: #32324A; border-radius: 11px;
+        transition: background 0.3s;
+        flex-shrink: 0;
+      }
+      .toggle-track.on { background: var(--gold); }
+      .toggle-thumb {
+        position: absolute; top: 3px; left: 3px;
+        width: 16px; height: 16px; border-radius: 50%;
+        background: #fff; transition: transform 0.3s;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      }
+      .toggle-track.on .toggle-thumb { transform: translateX(20px); }
+      .toggle-icon { font-size: 16px; }
+
       /* ── LAYOUT ── */
       .wc-body { padding: 24px 32px; }
 
@@ -340,6 +401,7 @@ ui <- fluidPage(
         display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap;
         background: var(--panel); border: 1px solid var(--border);
         border-radius: 10px; padding: 16px 20px; margin-bottom: 24px;
+        transition: background 0.3s, border-color 0.3s;
       }
       .control-group { display: flex; flex-direction: column; gap: 6px; }
       .control-label {
@@ -347,9 +409,10 @@ ui <- fluidPage(
         text-transform: uppercase; font-weight: 400;
       }
       #seed {
-        background: #1C1C2A; border: 1px solid var(--border); color: var(--text);
+        background: var(--input-bg); border: 1px solid var(--border); color: var(--text);
         border-radius: 6px; padding: 8px 12px; width: 120px;
         font-family: monospace; font-size: 14px;
+        transition: background 0.3s, border-color 0.3s, color 0.3s;
       }
       #run_btn {
         background: var(--gold); color: #000; border: none;
@@ -358,8 +421,6 @@ ui <- fluidPage(
         transition: all 0.2s; box-shadow: 0 0 20px rgba(245,197,24,0.3);
       }
       #run_btn:hover { background: #FFD740; box-shadow: 0 0 30px rgba(245,197,24,0.5); transform: translateY(-1px); }
-
-
 
       /* ── K SLIDER (Shiny) ── */
       #k_slider.js-range-slider { background: transparent; }
@@ -372,11 +433,13 @@ ui <- fluidPage(
       .irs--shiny .irs-min, .irs--shiny .irs-max { background: var(--panel); color: var(--muted); font-size: 11px; }
       .irs-with-grid { margin-bottom: 0 !important; }
       .form-group { margin-bottom: 0 !important; }
+
       /* ── PODIUM ── */
       .podium { display: flex; gap: 12px; margin-bottom: 24px; }
       .podium-card {
         flex: 1; background: var(--panel); border: 1px solid var(--border);
         border-radius: 12px; padding: 20px; text-align: center;
+        transition: background 0.3s, border-color 0.3s;
       }
       .podium-card.first  { border-color: var(--gold); box-shadow: 0 0 30px rgba(245,197,24,0.15); }
       .podium-card.second { border-color: #A8A9AD; }
@@ -410,37 +473,41 @@ ui <- fluidPage(
       .tab-content {
         background: var(--panel); border: 1px solid var(--border);
         border-top: none; border-radius: 0 0 10px 10px; padding: 20px;
+        transition: background 0.3s, border-color 0.3s;
       }
 
       /* ── GROUPS ── */
       .groups-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px,1fr)); gap: 16px; }
-      .group-card  { background: #0E0E18; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+      .group-card  { background: var(--group-card-bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; transition: background 0.3s; }
       .group-header {
-        background: linear-gradient(90deg, rgba(26,82,118,0.35), transparent);
+        background: var(--group-header-bg);
         border-bottom: 1px solid var(--border); padding: 10px 16px;
         font-family: 'Bebas Neue', sans-serif; font-size: 18px; letter-spacing: 3px; color: var(--lime);
       }
+      body.light-mode .group-header { color: #2a7a00; }
       .group-table { width: 100%; border-collapse: collapse; }
       .group-table th {
         color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
         padding: 6px 12px; text-align: right; font-weight: 400;
       }
       .group-table th:first-child { text-align: left; }
-      .group-table td { padding: 8px 12px; border-top: 1px solid rgba(255,255,255,0.04); text-align: right; }
+      .group-table td { padding: 8px 12px; border-top: 1px solid var(--ko-border); text-align: right; }
       .group-table td:first-child { text-align: left; }
       .group-table tr:first-child td { border-top: none; }
-      .qualify     { background: rgba(0,200,83,0.08); }
-      .qualify-3rd { background: rgba(41,121,255,0.06); }
+      .qualify     { background: var(--qualify-bg); }
+      .qualify-3rd { background: var(--qualify3-bg); }
       .rank-badge {
         display: inline-flex; align-items: center; justify-content: center;
         width: 20px; height: 20px; border-radius: 50%; font-size: 11px; font-weight: 600; margin-right: 6px;
       }
       .rank-1 { background: var(--gold); color: #000; }
       .rank-2 { background: #A8A9AD; color: #000; }
-      .rank-3 { background: rgba(41,121,255,0.3); color: var(--blue); border: 1px solid var(--blue); }
-      .rank-4 { background: rgba(255,255,255,0.05); color: var(--muted); }
+      .rank-3 { background: var(--rank3-bg); color: var(--blue); border: 1px solid var(--blue); }
+      .rank-4 { background: var(--rank4-bg); color: var(--muted); }
       .pts-cell { font-weight: 600; color: var(--gold); }
+      body.light-mode .pts-cell { color: #b8860b; }
       .gd-pos { color: var(--green); }
+      body.light-mode .gd-pos { color: #007a30; }
       .gd-neg { color: var(--red); }
 
       /* ── KO ── */
@@ -449,20 +516,24 @@ ui <- fluidPage(
         font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 3px; color: var(--lime);
         border-left: 4px solid var(--lime); padding-left: 12px; margin-bottom: 12px;
       }
+      body.light-mode .ko-round-title { color: #2a7a00; border-color: #2a7a00; }
       .ko-table { width: 100%; border-collapse: collapse; }
       .ko-table th {
         color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
         padding: 8px 14px; text-align: left; border-bottom: 1px solid var(--border); font-weight: 400;
       }
-      .ko-table td { padding: 9px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+      .ko-table td { padding: 9px 14px; border-bottom: 1px solid var(--ko-border); }
       .ko-table tr:last-child td { border-bottom: none; }
       .ko-score  { font-family: monospace; font-size: 15px; font-weight: 600; color: var(--gold); text-align: center; }
+      body.light-mode .ko-score { color: #b8860b; }
       .ko-winner { color: var(--green); font-weight: 600; }
+      body.light-mode .ko-winner { color: #007a30; }
 
       /* ── ELO ── */
-      .elo-bar-wrap { background: rgba(255,255,255,0.05); border-radius: 3px; height: 6px; width: 120px; }
+      .elo-bar-wrap { background: var(--elo-bar-bg); border-radius: 3px; height: 6px; width: 120px; }
       .elo-bar { background: linear-gradient(90deg, var(--navy), var(--lime)); height: 6px; border-radius: 3px; }
       .elo-up { color: var(--green); }
+      body.light-mode .elo-up { color: #007a30; }
       .elo-dn { color: var(--red); }
 
       /* ── SPINNER ── */
@@ -479,7 +550,7 @@ ui <- fluidPage(
       .loading-text { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 4px; color: var(--gold); }
 
       /* ── MISC ── */
-      select.form-control { background: #1C1C2A; border: 1px solid var(--border); color: var(--text); border-radius: 6px; }
+      select.form-control { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; }
       .shiny-output-error { color: var(--red); }
     "))
   ),
@@ -496,13 +567,21 @@ ui <- fluidPage(
               h1(class="wc-title", "🏆 FIFA World Cup 2026")
           ),
           div(style="display:flex; align-items:center; gap:20px;",
-          tags$img(src="StuKoLogoDark_Trans.png",
-                   class="fustat-logo", alt="StuKo",
-                   style="height:55px;"),
-          tags$img(src="FUstatWhiteOnGreen.svg",
-                   class="fustat-logo", alt="StuKo",
-                   style="height:55px;"),
-      )
+              # ── LIGHT MODE TOGGLE ──
+              div(class="theme-toggle", id="theme_toggle", onclick="toggleTheme()",
+                  span(class="toggle-icon", id="theme_icon", "🌙"),
+                  div(class="toggle-track", id="toggle_track",
+                      div(class="toggle-thumb")
+                  ),
+                  span(class="toggle-label", id="theme_label", "LIGHT MODE")
+              ),
+              tags$img(src="StuKoLogoDark_Trans.png",
+                       class="fustat-logo", alt="StuKo",
+                       style="height:55px;"),
+              tags$img(src="FUstatWhiteOnGreen.svg",
+                       class="fustat-logo", alt="StuKo",
+                       style="height:55px;")
+          )
       )
   ),
 
@@ -523,8 +602,6 @@ ui <- fluidPage(
               sliderInput("k_slider", label=NULL, min=0, max=60, value=20, step=5, ticks=FALSE, width="200px")
           ),
 
-
-
           actionButton("run_btn", "▶  SIMULATE", class="btn")
       ),
 
@@ -539,6 +616,28 @@ ui <- fluidPage(
   ),
 
   tags$script(HTML("
+    var lightMode = false;
+
+    function toggleTheme() {
+      lightMode = !lightMode;
+      var body       = document.body;
+      var track      = document.getElementById('toggle_track');
+      var icon       = document.getElementById('theme_icon');
+      var label      = document.getElementById('theme_label');
+
+      if (lightMode) {
+        body.classList.add('light-mode');
+        track.classList.add('on');
+        icon.textContent  = '☀️';
+        label.textContent = 'DARK MODE';
+      } else {
+        body.classList.remove('light-mode');
+        track.classList.remove('on');
+        icon.textContent  = '🌙';
+        label.textContent = 'LIGHT MODE';
+      }
+    }
+
     $(document).on('click', '#run_btn', function() {
       $('#loader').addClass('active');
     });
