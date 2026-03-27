@@ -276,6 +276,7 @@ run_tournament <- function(seed=NULL, k=20) {
 
 ui <- fluidPage(
   tags$head(
+    tags$meta(name="viewport", content="width=device-width, initial-scale=1.0"),
     tags$link(href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;600;700&display=swap", rel="stylesheet"),
     tags$style(HTML("
       /* ══ DARK MODE (default) ══ */
@@ -605,6 +606,28 @@ ui <- fluidPage(
       /* ── MISC ── */
       select.form-control { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; }
       .shiny-output-error { color: var(--red); }
+      
+      /* ── MOBILE ── */
+      @media (max-width: 600px) {
+        .wc-header { padding: 12px 16px; }
+        .header-inner { flex-direction: column; align-items: flex-start; gap: 10px; }
+        .wc-title { font-size: 28px; letter-spacing: 2px; }
+        .wc-subtitle { font-size: 10px; }
+        .fustat-logo { height: 28px; }
+        .Alumni-logo { height: 28px; }
+        div[style*='gap:20px'] { flex-wrap: wrap; gap: 8px !important; }
+        .wc-body { padding: 12px; }
+        .control-bar { flex-direction: column; align-items: stretch; gap: 14px; }
+        #run_btn { width: 100%; }
+        #seed { width: 100%; }
+        .podium { flex-direction: column; gap: 8px; }
+        .groups-grid { grid-template-columns: 1fr; }
+        .nav-tabs > li > a { font-size: 11px; padding: 8px 8px; letter-spacing: 0; }
+        .group-table td, .group-table th { padding: 5px 6px; font-size: 12px; }
+        .ko-table td, .ko-table th { padding: 5px 8px; font-size: 12px; }
+        .elo-bar-wrap { display: none; }
+        .tab-content { padding: 12px; }
+      }
     "))
   ),
   
