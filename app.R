@@ -280,12 +280,19 @@ ui <- fluidPage(
     tags$style(HTML("
       /* ══ DARK MODE (default) ══ */
       :root {
-        --gold:   #F5C518;
+        --fublue: #004659;
+        --fugreen: #CCFF00;
+        --fublack: #000000;
+        --fuwhite: #FFFFFF;
+        # --gold:   #F5C518;
+        --gold:   #CCFF00;
         --lime:   #7EC820;
         --navy:   #1A5276;
         --red:    #C8102E;
-        --dark:   #1A1A26;
-        --panel:  #22223A;
+        # --dark:   #1A1A26;
+        --dark:   #000000;
+        # --panel:  #22223A;
+        --panel:  #004659;
         --border: #32324A;
         --text:   #E8E8F0;
         --muted:  #6B6B80;
@@ -304,8 +311,11 @@ ui <- fluidPage(
 
       /* ══ LIGHT MODE ══ */
       body.light-mode {
-        --dark:   #F0F2F5;
+        # --dark:   #F0F2F5;
+        --dark:   #CCFF00;
+        # --panel:  #FFFFFF;
         --panel:  #FFFFFF;
+        # --gold:   #004659;
         --border: #D0D4DC;
         --text:   #1A1A2E;
         --muted:  #6B7280;
@@ -334,7 +344,8 @@ ui <- fluidPage(
         padding: 20px 40px; position: relative; overflow: hidden;
       }
       body.light-mode .wc-header {
-        background: linear-gradient(135deg, #1C2D4A 0%, #203860 50%, #1C2D4A 100%);
+        # background: linear-gradient(135deg, #1C2D4A 0%, #203860 50%, #1C2D4A 100%);
+        # background: linear-gradient(135deg, #FFFFFF 0%, #FFFFFF 50%, #FFFFFF 100%);
       }
       .wc-header::before {
         content: ''; position: absolute; inset: 0;
@@ -575,10 +586,13 @@ ui <- fluidPage(
                   ),
                   span(class="toggle-label", id="theme_label", "LIGHT MODE")
               ),
-              tags$img(src="StuKoLogoDark_Trans.png",
-                       class="fustat-logo", alt="StuKo",
+              tags$img(src="FUStatWhiteOnGreen.svg",
+                       class="fustat-logo", alt="FUSTAT",
                        style="height:55px;"),
-              tags$img(src="FUstatWhiteOnGreen.svg",
+              tags$img(src="WiWiss-Alumni.png",
+                       class="Alumni-logo", alt="Alumni",
+                       style="height:55px;"),
+              tags$img(src="StuKoLogoDark_Trans.png",
                        class="fustat-logo", alt="StuKo",
                        style="height:55px;")
           )
