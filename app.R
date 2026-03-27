@@ -627,6 +627,10 @@ ui <- fluidPage(
         .ko-table td, .ko-table th { padding: 5px 8px; font-size: 12px; }
         .elo-bar-wrap { display: none; }
         .tab-content { padding: 12px; }
+        .podium { flex-direction: column; gap: 8px; }
+        .podium-card.first  { order: 1; }
+        .podium-card.second { order: 2; }
+        .podium-card.third  { order: 3; }
       }
     "))
   ),
