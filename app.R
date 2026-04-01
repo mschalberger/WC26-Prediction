@@ -31,11 +31,11 @@ elo <- elo %>%
 teams_init <- teams %>%
   mutate(team_name = case_when(
     team_name == "Winner FIFA Playoff 1" ~ "DR Congo",
-    team_name == "Winner FIFA Playoff 2" ~ "Bolivia",
-    team_name == "Winner UEFA Playoff B" ~ "Poland",
+    team_name == "Winner FIFA Playoff 2" ~ "Iraq",
+    team_name == "Winner UEFA Playoff B" ~ "Sweden",
     team_name == "Winner UEFA Playoff C" ~ "Turkey",
-    team_name == "Winner UEFA Playoff A" ~ "Italy",
-    team_name == "Winner UEFA Playoff D" ~ "Denmark",
+    team_name == "Winner UEFA Playoff A" ~ "Bosnia and Herzegovina",
+    team_name == "Winner UEFA Playoff D" ~ "Czechia",
     TRUE ~ team_name
   )) %>%
   left_join(elo, by=c("team_name"="country"))
