@@ -13,8 +13,16 @@ library(DT)
 matches <- read.csv("data/matches.csv")
 teams   <- read.csv("data/teams.csv")
 
-elo       <- read.delim("https://www.eloratings.net/World.tsv?_=1772102421796",      sep="\t", header=FALSE)
-countries <- read.delim("https://www.eloratings.net/en.teams.tsv?_=1772102421794",   sep="\t", header=FALSE)
+elo_path       <- "data/cache/elo.tsv"
+countries_path <- "data/cache/countries.tsv"
+
+if (!file.exists(elo_path) || !file.exists(countries_path)) {
+  stop("Cache-Dateien fehlen. Bitte update_elo.R manuell ausführen.")
+}
+
+elo       <- read.delim(elo_path,       sep="\t", header=FALSE)
+countries <- read.delim(countries_path, sep="\t", header=FALSE)
+
 
 elo <- elo %>%
   left_join(countries, by=c("V3"="V1")) %>%
