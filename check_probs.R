@@ -2,7 +2,9 @@ library(dplyr)
 library(nnet)
 library(ggplot2)
 
-COMPETITIVE_CODES <- c("WC", "WCQ")
+load("data/elo_all_matches.RData")
+
+COMPETITIVE_CODES <- c("WC")
 
 # --- Data prep ---
 df <- elo_all_matches %>%
@@ -59,5 +61,4 @@ ggplot(goals_long, aes(p_self, goals)) +
   theme_minimal()
 
 lambda <- predict(model, newdata = data.frame(p_self = df$p_h))
-
 
