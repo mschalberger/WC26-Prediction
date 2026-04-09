@@ -1,0 +1,6 @@
+- sind ca. 12000 Spiele mit 400 Spalten 
+- erstmal nur bis 2012 zurückgegangen
+- Spiele gegen Vereine, U Nationalmannschaften, Frauenmannschaften und Nationalmannschaften die kein Fifa Mitglied sind etc. können mit den Spalten "is_international" und "is_senior_mens" herausgefiltert werden
+- viele Leere Felder da alte Spiele weniger bis kaum Statistiken haben
+- es wird angegeben welche Mannschaft Heim und welche Auswärts ist. Bei Turnieren wie einer WM, wird aber immer die erste Mannschaft als Heim angegeben, deswegen gibt es die Spalte "Match Venue". Ist die Heim Mannschaft wirklich Heim steht da "home", wenn es ein Turnier ist und beide Mannschaften Gast sind steht da "neutral", wenn die Heimmannschaft Gastgeber ist: "host_home", wenn die vermeintliche Auswärtsmannschaft  Gastgeber ist: "host_away". Das einzige Problem dabei wären Turniere, die von mehreren Ländern gehostet werden: wäre Kanada Heimmannschaft in den USA?
+- aufgrund von Spielen die in die Nachspielzeit gehen, habe ich jede verfügbare Statistik nochmal unterteilt in ALL = Gesamtes Spiel; 1ST = erste Halbzeit 2ND = zweite Halbzeit ET 1 = erste Halbzeit der Verlängerung etc. . Deswegen gibt es so viele Spalten, man könnte den Datensatz verschlanken indem man entweder alle Spiele nach 90min auswertet oder alle Spiele die länger als 90 gehen rausfiltert.
