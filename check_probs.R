@@ -4,7 +4,7 @@ library(ggplot2)
 
 load("data/elo_all_matches.RData")
 
-COMPETITIVE_CODES <- c("WC")
+COMPETITIVE_CODES <- c("WC", "EC", "CA", "AC", "AR", "OC")
 
 # --- Data prep ---
 df <- elo_all_matches %>%
@@ -27,6 +27,25 @@ df <- elo_all_matches %>%
     p_a = 1 - p_h
   ) %>%
   filter(!is.na(p_h), !is.na(home_goals), !is.na(away_goals))
+
+df <- df %>%
+  mutate(
+    p_bin = cut(p_h, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE),
+    p_lo = as.numeric(sub("\\((.+),.*", "\\1", p_bin)),
+    p_lo = tidyr::replace_na(p_lo, 0),
+    p_hi = as.numeric(sub(".*,([^]]+)\\]", "\\1", p_bin)),
+    goal_diff = home_goals - away_goals
+  )
+
+# --- Score distribution by probability bin ---
+score_dist <- df %>%
+  group_by(p_bin, p_lo, p_hi,outcome, home_goals, away_goals) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(p_bin, outcome) %>%
+  mutate(prob = n / sum(n)) %>%
+  arrange(p_bin, outcome, desc(prob))
+
+write.csv(score_dist, "data/score_dist.csv", row.names=FALSE)
 
 # --- Draw probability ---
 sigma_hat <- sqrt(mean((df$p_h - 0.5)^2))
