@@ -898,7 +898,7 @@ server <- function(input, output, session) {
 
   observeEvent(input$run_btn, {
     seed <- suppressWarnings(as.integer(input$seed))
-    if (is.na(seed)) seed <- sample(1:99999, 1)
+    if (is.na(seed)) seed <- as.integer(as.numeric(Sys.time())) %% .Machine$integer.max
 
     k_val        <- as.integer(input$k_slider %||% 20)
     use_hist     <- isTRUE(input$use_historical == "1")
