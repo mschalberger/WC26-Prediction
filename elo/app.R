@@ -10,11 +10,11 @@ library(DT)
 
 # ── DATA ─────────────────────────────────────────────────────
 
-matches <- read.csv("data/matches.csv")
-teams   <- read.csv("data/teams.csv")
+matches <- read.csv("../data/matches.csv")
+teams   <- read.csv("../data/teams.csv")
 
-elo_path       <- "data/cache/elo.tsv"
-countries_path <- "data/cache/countries.tsv"
+elo_path       <- "../data/cache/elo.tsv"
+countries_path <- "../data/cache/countries.tsv"
 
 if (!file.exists(elo_path) || !file.exists(countries_path)) {
   stop("Cache-Dateien fehlen. Bitte update_elo.R manuell ausführen.")
@@ -68,26 +68,16 @@ flag_map <- c(MEX="🇲🇽",RSA="🇿🇦",KOR="🇰🇷",UEPD="🇨🇿",CAN="
 get_flag <- function(code) { ifelse(is.na(flag_map[code]), "🏳️", flag_map[code]) }
 
 
-hist_score_dist <- read.csv("data/score_dist.csv", stringsAsFactors = FALSE)
+hist_score_dist <- read.csv("../data/score_dist.csv", stringsAsFactors = FALSE)
 
 # Sample a score from historical distribution.
 # p_fav  : favourite's ELO win probability (>= 0.5 always — caller must ensure this)
 # outcome: "fav_win" | "draw" | "und_win"
 # Returns list(fav_goals, und_goals)
 sample_hist_score <- function(p_fav, sim_outcome) {
-  if (is.null(hist_score_dist)) return(NULL)   # fallback signal
-
-  # Map sim_outcome to the CSV's home/away convention
-  # ("home" = favourite wins, "away" = underdog wins)
-  csv_outcome <- switch(sim_outcome,
-                        fav_win = "home",
-                        und_win = "away",
-                        "draw"          # draw stays draw
-  )
-
   # Find bin — p_fav is always in [0.5, 1.0]; the top bin uses include.lowest
   bin_row <- hist_score_dist %>%
-    filter(outcome == csv_outcome,
+    filter(outcome == sim_outcome,
            p_lo <= p_fav, p_fav < p_hi)
 
   # Edge case: p_fav == 1.0 → use top bin
@@ -99,8 +89,8 @@ sample_hist_score <- function(p_fav, sim_outcome) {
   if (nrow(bin_row) == 0) return(NULL)   # fallback signal
 
   idx       <- sample(nrow(bin_row), 1, prob = bin_row$prob)
-  fav_goals <- bin_row$home_goals[idx]   # "home" ≡ favourite in the CSV
-  und_goals <- bin_row$away_goals[idx]
+  fav_goals <- bin_row$fav_goals[idx]   # "home" ≡ favourite in the CSV
+  und_goals <- bin_row$und_goals[idx]
   list(fav_goals = fav_goals, und_goals = und_goals)
 }
 
@@ -109,18 +99,10 @@ sample_hist_score <- function(p_fav, sim_outcome) {
 elo_expected <- function(ea, eb) 1 / (1 + 10^((eb - ea) / 400))
 
 simulate_match <- function(elo_home, elo_away, k = 20,
-                           max_win_prob = 0.95,
                            use_historical = FALSE) {
 
   # Raw win probability
-  p_h_raw <- elo_expected(elo_home, elo_away)
-
-  # Apply max-win-probability cap (symmetric around 0.5)
-  p_h <- if (p_h_raw > 0.5) {
-    0.5 + min(p_h_raw - 0.5, max_win_prob - 0.5)
-  } else {
-    0.5 - min(0.5 - p_h_raw, max_win_prob - 0.5)
-  }
+  p_h <- elo_expected(elo_home, elo_away)
 
   draw_p <- 1/3 * exp(-((p_h - .5)^2) / (2 * 0.236875^2))
   ph <- p_h * (1 - draw_p)
@@ -184,7 +166,6 @@ simulate_match <- function(elo_home, elo_away, k = 20,
 # ── GROUP STAGE ──────────────────────────────────────────────
 
 run_group_stage <- function(teams_df, k = 20,
-                            max_win_prob = 0.95,
                             use_historical = FALSE) {
   elo_start <- setNames(teams_df$elo, teams_df$id)
   elo_live  <- elo_start
@@ -204,7 +185,6 @@ run_group_stage <- function(teams_df, k = 20,
       elo_a <- elo_live[as.character(a)]
 
       res <- simulate_match(elo_h, elo_a, k = k,
-                            max_win_prob   = max_win_prob,
                             use_historical = use_historical)
 
       elo_live[as.character(h)] <- res$new_elo_home
@@ -247,13 +227,11 @@ run_group_stage <- function(teams_df, k = 20,
 
 sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
                          round_name, k = 20,
-                         max_win_prob = 0.95,
                          use_historical = FALSE) {
   elo_h <- elo_live[as.character(id_a)]
   elo_a <- elo_live[as.character(id_b)]
 
   res  <- simulate_match(elo_h, elo_a, k = k,
-                         max_win_prob   = max_win_prob,
                          use_historical = use_historical)
   pens <- ""
   if (res$outcome == "draw") {
@@ -282,13 +260,11 @@ sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
 
 run_knockout <- function(pairs, elo_live, teams_df,
                          round_name, k = 20,
-                         max_win_prob = 0.95,
                          use_historical = FALSE) {
   winners <- c(); losers <- c(); rows <- data.frame()
   for (pair in pairs) {
     res      <- sim_ko_match(pair[1], pair[2], elo_live, teams_df,
                              round_name, k = k,
-                             max_win_prob   = max_win_prob,
                              use_historical = use_historical)
     elo_live <- res$elo_live
     winners  <- c(winners, res$winner)
@@ -301,13 +277,11 @@ run_knockout <- function(pairs, elo_live, teams_df,
 # ── TOURNAMENT ───────────────────────────────────────────────
 
 run_tournament <- function(seed = NULL, k = 20,
-                           max_win_prob = 0.95,
                            use_historical = FALSE) {
   if (!is.null(seed)) set.seed(seed)
   teams_df <- teams_init
 
   gs       <- run_group_stage(teams_df, k = k,
-                              max_win_prob   = max_win_prob,
                               use_historical = use_historical)
   elo_live <- gs$elo_live
   std      <- gs$standings
@@ -337,7 +311,7 @@ run_tournament <- function(seed = NULL, k = 20,
   )
 
   ko_args <- list(elo_live = elo_live, teams_df = teams_df,
-                  k = k, max_win_prob = max_win_prob,
+                  k = k,
                   use_historical = use_historical)
 
   r32 <- do.call(run_knockout, c(list(pairs = r32_pairs, round_name = "Round of 32"),   ko_args))
@@ -819,13 +793,6 @@ ui <- fluidPage(
                           ticks=FALSE, width="200px")
           ),
 
-          # ── NEW: Max Win Probability slider ──────────────────────
-          div(class="control-group",
-              div(class="control-label", "Max Win Probability"),
-              sliderInput("max_win_prob", label=NULL,
-                          min=0.50, max=1.00, value=0.95, step=0.01,
-                          ticks=FALSE, width="220px")
-          ),
 
           # ── NEW: Score mode toggle (Poisson / Historical) ─────────
           div(class="control-group score-mode-wrap",
@@ -927,19 +894,17 @@ server <- function(input, output, session) {
   result <- reactiveVal(NULL)
 
   # Run on startup with defaults
-  observe({ result(run_tournament(seed=123, k=20, max_win_prob=0.95, use_historical=FALSE)) })
+  observe({ result(run_tournament(seed=123, k=20, use_historical=FALSE)) })
 
   observeEvent(input$run_btn, {
     seed <- suppressWarnings(as.integer(input$seed))
     if (is.na(seed)) seed <- sample(1:99999, 1)
 
     k_val        <- as.integer(input$k_slider %||% 20)
-    mwp          <- as.numeric(input$max_win_prob %||% 0.95)
     use_hist     <- isTRUE(input$use_historical == "1")
 
     result(run_tournament(seed           = seed,
                           k              = k_val,
-                          max_win_prob   = mwp,
                           use_historical = use_hist))
   })
 
