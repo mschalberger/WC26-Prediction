@@ -802,8 +802,8 @@ ui <- fluidPage(
                   div(class="score-mode-track", id="score_mode_track",
                       div(class="score-mode-thumb")
                   ),
-                  span(class="score-mode-label", id="score_mode_label", "Poisson"),
-                  span(class="mode-badge",        id="score_mode_badge", "ACTIVE")
+                  span(class="score-mode-label", id="score_mode_label", "Poisson")
+                  #span(class="mode-badge",        id="score_mode_badge", "ACTIVE")
               ),
               # Hidden input read by Shiny
               tags$input(type="hidden", id="use_historical", value="0")
