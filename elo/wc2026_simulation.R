@@ -456,6 +456,121 @@ p_reach <- ggplot(reach_top, aes(x = team_name, y = pct, color = round, group = 
 ggsave(out("wc2026_progression.png"), p_reach, width = 14, height = 7, dpi = 180, bg = "#1A1A26")
 message(paste("✅ Saved:", out("wc2026_progression.png")))
 
+# ── OVER / UNDER PERFORMER ANALYSIS ──────────────────────────
+#
+# Method: assign numeric scores to exit rounds, fit a LOESS curve
+# of mean score ~ ELO across all teams, then measure each team's
+# residual (actual - LOESS-fitted expected). This way "expected"
+# is calibrated to what teams at that ELO level actually achieve
+# in the simulation, not a naive linear extrapolation.
+#
+# Round score: Group=0, R32=1, R16=2, QF=3, 4th=4, 3rd=5, RU=6, Champion=7
+
+round_score <- c(
+  "Group Stage"   = 0, "Round of 32"   = 1,
+  "Round of 16"   = 2, "Quarter-Final" = 3,
+  "Fourth Place"  = 4, "Third Place"   = 5,
+  "Runner-Up"     = 6, "Champion"      = 7
+)
+
+# Mean score per team across all simulations
+actual_score <- all_results %>%
+  mutate(score = round_score[exit_round]) %>%
+  group_by(team_name) %>%
+  summarise(actual = mean(score), .groups = "drop")
+
+# Join ELO
+perf_base <- actual_score %>%
+  left_join(teams_init %>% select(team_name, elo), by = "team_name")
+
+# Fit LOESS: mean_score ~ ELO  (span controls smoothness)
+loess_fit  <- loess(actual ~ elo, data = perf_base, span = 0.6)
+perf_base  <- perf_base %>%
+  mutate(
+    exp_score = predict(loess_fit, newdata = data.frame(elo = elo)),
+    delta     = actual - exp_score,
+    direction = ifelse(delta >= 0, "Over", "Under")
+  ) %>%
+  arrange(desc(delta))
+
+n_show    <- 10
+top_over  <- perf_base %>% slice_max(delta, n = n_show)
+top_under <- perf_base %>% slice_min(delta, n = n_show)
+
+plot_perf <- bind_rows(top_over, top_under) %>%
+  distinct(team_name, .keep_all = TRUE) %>%
+  arrange(delta) %>%
+  mutate(
+    team_name = factor(team_name, levels = team_name),
+    label     = sprintf("%+.2f", delta)
+  )
+
+p_perf <- ggplot(plot_perf, aes(x = team_name, y = delta, fill = direction)) +
+  geom_hline(yintercept = 0, color = "#32324A", linewidth = 0.6) +
+  geom_col(width = 0.7, show.legend = FALSE) +
+  geom_text(
+    aes(label = label, hjust = ifelse(delta >= 0, -0.15, 1.15)),
+    size = 3.2, family = FONT_BODY, fontface = "bold", color = "#E8E8F0"
+  ) +
+  geom_point(aes(y = 0, size = elo), shape = 21,
+             fill = "#F5C518", color = "#000", alpha = 0.55,
+             show.legend = FALSE) +
+  scale_size_continuous(range = c(2, 7)) +
+  scale_fill_manual(values = c("Over" = "#7EC820", "Under" = "#C8102E")) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0.22, 0.22)),
+    labels = function(x) sprintf("%+.1f", x)
+  ) +
+  coord_flip() +
+  annotate("text", x = Inf, y = -Inf,
+           label = "\u25cf dot size = starting ELO",
+           hjust = -0.05, vjust = 12,
+           color = "#6B6B80", size = 2.8, family = FONT_BODY) +
+  geom_vline(xintercept = n_show + 0.5, color = "#32324A",
+             linewidth = 0.4, linetype = "dashed") +
+  annotate("text", x = n_show + 1.35, y = max(abs(plot_perf$delta)) * 0.85,
+           label = "OVERPERFORMERS", color = "#7EC820",
+           size = 2.8, family = FONT_TITLE, hjust = 1) +
+  annotate("text", x = n_show - 0.35, y = max(abs(plot_perf$delta)) * 0.85,
+           label = "UNDERPERFORMERS", color = "#C8102E",
+           size = 2.8, family = FONT_TITLE, hjust = 1) +
+  labs(
+    title    = "\U0001f4c8 ELO OVER & UNDER PERFORMERS",
+    subtitle = sprintf(
+      "Residual from LOESS(mean score ~ ELO)  \u2022  %s sims  \u2022  Score: Group=0 \u2192 Champion=7",
+      scales::comma(N_SIMS)),
+    x        = NULL,
+    y        = "Performance delta  (actual \u2212 LOESS-expected)",
+    caption  = "Expected score fitted via LOESS regression on ELO  \u2022  Balanced over/under by construction"
+  ) +
+  theme_minimal(base_family = FONT_BODY) +
+  theme(
+    plot.background    = element_rect(fill = "#1A1A26", color = NA),
+    panel.background   = element_rect(fill = "#1A1A26", color = NA),
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_line(color = "#32324A", linewidth = 0.35),
+    panel.grid.minor   = element_blank(),
+    axis.text          = element_text(color = "#A0A0B0", size = 11, family = FONT_BODY),
+    axis.text.x        = element_text(color = "#6B6B80", size = 9),
+    axis.title.x       = element_text(color = "#6B6B80", size = 10, margin = margin(t = 8)),
+    plot.title         = element_text(family = FONT_TITLE, size = 26, color = "#F5C518",
+                                      margin = margin(b = 4)),
+    plot.subtitle      = element_text(color = "#7EC820", size = 10, margin = margin(b = 14)),
+    plot.caption       = element_text(color = "#6B6B80", size = 8.5, hjust = 0),
+    plot.margin        = margin(20, 36, 16, 20)
+  )
+
+ggsave(out("wc2026_over_under_performers.png"), p_perf,
+       width = 11, height = 9, dpi = 180, bg = "#1A1A26")
+message(paste("\u2705 Saved:", out("wc2026_over_under_performers.png")))
+
+cat("\n\u2500\u2500 TOP OVERPERFORMERS (vs LOESS-expected) \u2500\u2500\n")
+print(top_over  %>% select(Team=team_name, ELO=elo, Expected=exp_score, Actual=actual, Delta=delta),
+      digits = 2, row.names = FALSE)
+cat("\n\u2500\u2500 TOP UNDERPERFORMERS (vs LOESS-expected) \u2500\u2500\n")
+print(top_under %>% select(Team=team_name, ELO=elo, Expected=exp_score, Actual=actual, Delta=delta),
+      digits = 2, row.names = FALSE)
+
 # ── PRINT SUMMARY TABLE ───────────────────────────────────────
 cat("\n")
 cat("══════════════════════════════════════════════════════\n")
