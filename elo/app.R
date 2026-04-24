@@ -894,7 +894,7 @@ server <- function(input, output, session) {
   result <- reactiveVal(NULL)
 
   # Run on startup with defaults
-  observe({ result(run_tournament(seed=123, k=20, use_historical=FALSE)) })
+  observe({ result(run_tournament(seed=111, k=20, use_historical=FALSE)) })
 
   observeEvent(input$run_btn, {
     seed <- suppressWarnings(as.integer(input$seed))
