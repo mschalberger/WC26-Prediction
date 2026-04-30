@@ -16,7 +16,6 @@ suppressPackageStartupMessages({
 data_dir       <- "/srv/shiny-server/wm2026/data"
 teams_path     <- file.path(data_dir, "teams.csv")
 results_path   <- file.path(data_dir, "cache", "results.tsv")
-overrides_path <- file.path(data_dir, "team_name_map.tsv")  # optional
 log_path       <- file.path(data_dir, "cache", "update_results.log")
 
 # football-data.org stage codes → app.R stage labels.
@@ -42,29 +41,6 @@ log_msg <- function(...) {
                 paste0(..., collapse = ""))
   message(msg)
   cat(msg, "\n", file = log_path, append = TRUE)
-}
-
-# Spiegelt das Namens-Mapping aus app.R, damit API-Namen zur teams.csv passen
-normalize_team_name <- function(x) {
-  x <- gsub("^\\s+|\\s+$", "", x)
-  case_when(
-    x == "United States"                ~ "USA",
-    x == "Iran"                         ~ "IR Iran",
-    x == "Cape Verde"                   ~ "Cabo Verde",
-    x == "Ivory Coast"                  ~ "Côte d'Ivoire",
-    x == "Democratic Republic of Congo" ~ "DR Congo",
-    TRUE ~ x
-  )
-}
-
-load_overrides <- function() {
-  if (file.exists(overrides_path)) {
-    read.delim(overrides_path, sep = "\t", header = TRUE,
-               stringsAsFactors = FALSE)
-  } else {
-    data.frame(fdorg_name = character(), team_name = character(),
-               stringsAsFactors = FALSE)
-  }
 }
 
 read_token <- function() {
@@ -103,20 +79,19 @@ build_row <- function(m, teams_df, overrides) {
     return(NULL)
   }
   
-  resolve_id <- function(api_name) {
-    api_name <- normalize_team_name(api_name)
-    o <- overrides[overrides$fdorg_name == api_name, "team_name"]
-    if (length(o) > 0) api_name <- o[1]
-    hit <- teams_df[teams_df$team_name == api_name, "id"]
+  resolve_id <- function(tla) {
+    if (is.null(tla) || tla == "") return(NA_integer_)
+    hit <- teams_df[teams_df$fifa_code == tla, "id"]
     if (length(hit) == 0) return(NA_integer_)
     hit[1]
   }
   
-  hid <- resolve_id(m$homeTeam$name %||% "")
-  aid <- resolve_id(m$awayTeam$name %||% "")
+  hid <- resolve_id(m$homeTeam$tla %||% "")
+  aid <- resolve_id(m$awayTeam$tla %||% "")
   if (is.na(hid) || is.na(aid)) {
-    log_msg("Skip match ", m$id, " (", m$homeTeam$name, " vs ",
-            m$awayTeam$name, "): team not in teams.csv")
+    log_msg("Skip match ", m$id, " (",
+            m$homeTeam$tla %||% "?", " vs ", m$awayTeam$tla %||% "?",
+            "): tla not in teams.csv")
     return(NULL)
   }
   
