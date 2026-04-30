@@ -68,7 +68,7 @@ fetch_wc_matches <- function(token) {
 }
 
 # ── BUILD ROW ────────────────────────────────────────────────
-build_row <- function(m, teams_df, overrides) {
+build_row <- function(m, teams_df) {
   status <- m$status %||% ""
   if (!status %in% c("FINISHED", "AWARDED")) return(NULL)
   
@@ -126,11 +126,10 @@ main <- function() {
     quit(status = 1)
   }
   
-  teams_df  <- read.csv(teams_path, stringsAsFactors = FALSE)
-  overrides <- load_overrides()
+  teams_df <- read.csv(teams_path, stringsAsFactors = FALSE)
   
-  rows <- lapply(matches, build_row,
-                 teams_df = teams_df, overrides = overrides)
+  rows <- lapply(matches, build_row, teams_df = teams_df)
+  
   rows <- rows[!sapply(rows, is.null)]
   
   df <- if (length(rows) == 0) {
