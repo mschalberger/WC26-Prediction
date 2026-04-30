@@ -96,10 +96,7 @@ build_row <- function(m, teams_df) {
   ft <- m$score$fullTime
   hg <- ft$home %||% NA
   ag <- ft$away %||% NA
-  if (is.na(hg) || is.na(ag)) {
-    if (is.na(hg) || is.na(ag)) { hg <- 0L; ag <- 0L }  # TEST MODE
-    return(NULL)
-  }
+  if (is.na(hg) || is.na(ag)) { hg <- 0L; ag <- 0L }  # TEST MODE
   
   pens_winner_id <- NA_integer_
   if ((m$score$duration %||% "REGULAR") == "PENALTY_SHOOTOUT") {

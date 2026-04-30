@@ -84,15 +84,6 @@ elo <- elo %>%
   ))
 
 teams_init <- teams %>%
-  mutate(team_name = case_when(
-    team_name == "Winner FIFA Playoff 1" ~ "DR Congo",
-    team_name == "Winner FIFA Playoff 2" ~ "Iraq",
-    team_name == "Winner UEFA Playoff B" ~ "Sweden",
-    team_name == "Winner UEFA Playoff C" ~ "Turkey",
-    team_name == "Winner UEFA Playoff A" ~ "Bosnia and Herzegovina",
-    team_name == "Winner UEFA Playoff D" ~ "Czechia",
-    TRUE ~ team_name
-  )) %>%
   left_join(elo, by=c("team_name"="country"))
 
 # Warn about any teams that didn't match the ELO source
@@ -105,12 +96,12 @@ if (length(missing) > 0) {
 }
 
 # Flag emoji lookup
-flag_map <- c(MEX="🇲🇽",RSA="🇿🇦",KOR="🇰🇷",UEPD="🇨🇿",CAN="🇨🇦",UEPA="🇧🇦",QAT="🇶🇦",
+flag_map <- c(MEX="🇲🇽",RSA="🇿🇦",KOR="🇰🇷",CZE="🇨🇿",CAN="🇨🇦",BIH="🇧🇦",QAT="🇶🇦",
               SUI="🇨🇭",BRA="🇧🇷",MAR="🇲🇦",HAI="🇭🇹",SCO="🏴󠁧󠁢󠁳󠁣󠁴󠁿",USA="🇺🇸",PAR="🇵🇾",
-              AUS="🇦🇺",UEPC="🇹🇷",GER="🇩🇪",CUR="🇨🇼",CIV="🇨🇮",ECU="🇪🇨",NED="🇳🇱",
-              JPN="🇯🇵",UEPB="🇸🇪",TUN="🇹🇳",BEL="🇧🇪",EGY="🇪🇬",IRN="🇮🇷",NZL="🇳🇿",
-              ESP="🇪🇸",CPV="🇨🇻",KSA="🇸🇦",URU="🇺🇾",FRA="🇫🇷",SEN="🇸🇳",FP02="🇮🇶",
-              NOR="🇳🇴",ARG="🇦🇷",ALG="🇩🇿",AUT="🇦🇹",JOR="🇯🇴",POR="🇵🇹",FP01="🇨🇩",
+              AUS="🇦🇺",TUR="🇹🇷",GER="🇩🇪",CUR="🇨🇼",CIV="🇨🇮",ECU="🇪🇨",NED="🇳🇱",
+              JPN="🇯🇵",SWE="🇸🇪",TUN="🇹🇳",BEL="🇧🇪",EGY="🇪🇬",IRN="🇮🇷",NZL="🇳🇿",
+              ESP="🇪🇸",CPV="🇨🇻",KSA="🇸🇦",URU="🇺🇾",FRA="🇫🇷",SEN="🇸🇳",IRQ="🇮🇶",
+              NOR="🇳🇴",ARG="🇦🇷",ALG="🇩🇿",AUT="🇦🇹",JOR="🇯🇴",POR="🇵🇹",COD="🇨🇩",
               UZB="🇺🇿",COL="🇨🇴",ENG="🏴󠁧󠁢󠁥󠁮󠁧󠁿",CRO="🇭🇷",GHA="🇬🇭",PAN="🇵🇦")
 
 get_flag <- function(code) { ifelse(is.na(flag_map[code]), "🏳️", flag_map[code]) }
