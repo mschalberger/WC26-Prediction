@@ -6,11 +6,10 @@ library(scales)
 
 # ── CONFIG ───────────────────────────────────────────────────
 
-N_SIMS       <- 10000
+N_SIMS       <- 20000
 SEED         <- 42
-K            <- 20
-MAX_WIN_PROB <- 1
-USE_HIST     <- FALSE
+K            <- 60
+USE_HIST     <- TRUE
 GERMANY_NAME <- "Germany"
 TOP_N        <- 10
 
@@ -133,12 +132,8 @@ get_flag <- function(code) ifelse(is.na(flag_map[code]), "🏳️", unname(flag_
 
 elo_expected <- function(ea, eb) 1 / (1 + 10^((eb - ea) / 400))
 
-elo_wdl <- function(elo_h, elo_a, max_win_prob = MAX_WIN_PROB) {
-  p_h_raw <- elo_expected(elo_h, elo_a)
-  p_h <- if (p_h_raw >= 0.5)
-    0.5 + min(p_h_raw - 0.5, max_win_prob - 0.5)
-  else
-    0.5 - min(0.5 - p_h_raw, max_win_prob - 0.5)
+elo_wdl <- function(elo_h, elo_a) {
+  p_h <- elo_expected(elo_h, elo_a)
   draw_p <- 1/3 * exp(-((p_h - .5)^2) / (2 * 0.236875^2))
   list(win = p_h * (1 - draw_p), draw = draw_p, loss = (1 - p_h) * (1 - draw_p))
 }
@@ -163,13 +158,10 @@ analytical_score_dist <- function(elo_ger, elo_opp, hist_sd) {
   ger_is_fav <- (p_raw >= 0.5)
   p_fav     <- if (ger_is_fav) p_raw else (1 - p_raw)
 
-  # Apply max-win-prob cap
-  p_fav_cap <- 0.5 + min(p_fav - 0.5, MAX_WIN_PROB - 0.5)
-
   # ELO-derived W/D/L probabilities (from the favourite's point of view)
-  draw_p  <- 1/3 * exp(-((p_fav_cap - 0.5)^2) / (2 * 0.236875^2))
-  p_fav_w <- p_fav_cap * (1 - draw_p)   # P(favourite wins)
-  p_und_w <- (1 - p_fav_cap) * (1 - draw_p)   # P(underdog wins)
+  draw_p  <- 1/3 * exp(-((p_fav - 0.5)^2) / (2 * 0.236875^2))
+  p_fav_w <- p_fav * (1 - draw_p)   # P(favourite wins)
+  p_und_w <- (1 - p_fav) * (1 - draw_p)   # P(underdog wins)
 
   outcome_weights <- list(
     list(csv = "fav_win", weight = p_fav_w),
@@ -181,7 +173,7 @@ analytical_score_dist <- function(elo_ger, elo_opp, hist_sd) {
     if (oc$weight == 0) return(NULL)
 
     bin <- hist_sd %>%
-      filter(outcome == oc$csv, p_lo <= p_fav_cap, p_fav_cap < p_hi)
+      filter(outcome == oc$csv, p_lo <= p_fav_w, p_fav_w < p_hi)
     if (nrow(bin) == 0)
       bin <- hist_sd %>%
       filter(outcome == oc$csv,
@@ -207,23 +199,19 @@ analytical_score_dist <- function(elo_ger, elo_opp, hist_sd) {
 # ── SIMULATE MATCH (used only for MC) ────────────────────────
 
 sample_hist_score <- function(p_fav, sim_outcome, hist_sd) {
-  csv_out <- switch(sim_outcome, fav_win = "home", und_win = "away", "draw")
-  bin <- hist_sd %>% filter(outcome == csv_out, p_lo <= p_fav, p_fav < p_hi)
+  #csv_out <- switch(sim_outcome, fav_win = "home", und_win = "away", "draw")
+  bin <- hist_sd %>% filter(outcome == sim_outcome, p_lo <= p_fav, p_fav < p_hi)
   if (nrow(bin) == 0)
-    bin <- hist_sd %>% filter(outcome == csv_out,
-                              p_hi == max(p_hi[outcome == csv_out]))
+    bin <- hist_sd %>% filter(outcome == sim_outcome,
+                              p_hi == max(p_hi[outcome == sim_outcome]))
   if (nrow(bin) == 0) return(NULL)
   idx <- sample(nrow(bin), 1, prob = bin$prob)
-  list(fav_goals = bin$home_goals[idx], und_goals = bin$away_goals[idx])
+  list(fav_goals = bin$fav_goals[idx], und_goals = bin$und_goals[idx])
 }
 
-simulate_match <- function(elo_h, elo_a, k = 20, max_win_prob = 0.95,
+simulate_match <- function(elo_h, elo_a, k = 20,
                            use_hist = FALSE, hist_sd = NULL) {
-  p_h_raw <- elo_expected(elo_h, elo_a)
-  p_h <- if (p_h_raw >= 0.5)
-    0.5 + min(p_h_raw - 0.5, max_win_prob - 0.5)
-  else
-    0.5 - min(0.5 - p_h_raw, max_win_prob - 0.5)
+  p_h <- elo_expected(elo_h, elo_a)
   draw_p  <- 1/3 * exp(-((p_h - .5)^2) / (2 * 0.236875^2))
   ph <- p_h * (1 - draw_p); pa <- (1 - p_h) * (1 - draw_p)
   outcome <- sample(c("home","draw","away"), 1, prob = c(ph, draw_p, pa))
@@ -262,7 +250,7 @@ simulate_match <- function(elo_h, elo_a, k = 20, max_win_prob = 0.95,
 
 # ── GROUP STAGE ──────────────────────────────────────────────
 
-run_group_stage <- function(teams_df, k, mwp, use_hist, hist_sd,
+run_group_stage <- function(teams_df, k,  use_hist, hist_sd,
                             germany_name = "Germany") {
   elo_live   <- setNames(teams_df$elo, teams_df$id)
   all_st     <- data.frame()
@@ -277,7 +265,7 @@ run_group_stage <- function(teams_df, k, mwp, use_hist, hist_sd,
     for (pair in pairs) {
       h <- pair[1]; a <- pair[2]
       res <- simulate_match(elo_live[as.character(h)], elo_live[as.character(a)],
-                            k = k, max_win_prob = mwp,
+                            k = k,
                             use_hist = use_hist, hist_sd = hist_sd)
       elo_live[as.character(h)] <- res$new_elo_home
       elo_live[as.character(a)] <- res$new_elo_away
@@ -320,12 +308,12 @@ run_group_stage <- function(teams_df, k, mwp, use_hist, hist_sd,
 }
 # ── KNOCKOUT ─────────────────────────────────────────────────
 
-run_knockout <- function(pairs, elo_live, teams_df, k, mwp, use_hist, hist_sd) {
+run_knockout <- function(pairs, elo_live, teams_df, k, use_hist, hist_sd) {
   winners <- c(); losers <- c()
   for (pair in pairs) {
     res <- simulate_match(elo_live[as.character(pair[1])],
                           elo_live[as.character(pair[2])],
-                          k = k, max_win_prob = mwp,
+                          k = k,
                           use_hist = use_hist, hist_sd = hist_sd)
     elo_live[as.character(pair[1])] <- res$new_elo_home
     elo_live[as.character(pair[2])] <- res$new_elo_away
@@ -343,10 +331,10 @@ run_knockout <- function(pairs, elo_live, teams_df, k, mwp, use_hist, hist_sd) {
 # ── SINGLE TOURNAMENT ────────────────────────────────────────
 
 run_tournament <- function(teams_init, hist_sd, seed = NULL,
-                           k = 20, mwp = 0.95, use_hist = FALSE,
+                           k = 20, use_hist = FALSE,
                            germany_name = "Germany") {
   if (!is.null(seed)) set.seed(seed)
-  gs  <- run_group_stage(teams_init, k, mwp, use_hist, hist_sd,
+  gs  <- run_group_stage(teams_init, k, use_hist, hist_sd,
                          germany_name = germany_name)
   std <- gs$standings
   el  <- gs$elo_live
@@ -365,7 +353,7 @@ run_tournament <- function(teams_init, hist_sd, seed = NULL,
     c(gt("B",1),thirds$id[7]), c(gt("D",2),gt("G",2)),
     c(gt("J",1),gt("H",2)), c(gt("K",1),thirds$id[8])
   )
-  ko <- list(elo_live=el, teams_df=teams_init, k=k, mwp=mwp,
+  ko <- list(elo_live=el, teams_df=teams_init, k=k,
              use_hist=use_hist, hist_sd=hist_sd)
 
   r32 <- do.call(run_knockout, c(list(pairs=r32p), ko))
@@ -397,7 +385,7 @@ run_tournament <- function(teams_init, hist_sd, seed = NULL,
 # ── MONTE CARLO ──────────────────────────────────────────────
 
 run_mc <- function(n_sims, teams_init, hist_sd,
-                   k = 20, mwp = 0.95, use_hist = TRUE, seed_base = 42,
+                   k = 20,  use_hist = TRUE, seed_base = 42,
                    germany_name = "Germany") {
   message(sprintf("Running %d simulations...", n_sims))
   all_ids <- teams_init$id
@@ -415,7 +403,7 @@ run_mc <- function(n_sims, teams_init, hist_sd,
   for (sim in seq_len(n_sims)) {
     if (sim %% 500 == 0) message(sprintf("  sim %d / %d", sim, n_sims))
     r <- run_tournament(teams_init, hist_sd, seed = seeds[sim],
-                        k = k, mwp = mwp, use_hist = use_hist,
+                        k = k, use_hist = use_hist,
                         germany_name = germany_name)
     for (id in as.character(r$group_out))
       elim[id,"Group Stage"]   <- elim[id,"Group Stage"]   + 1L
@@ -806,21 +794,44 @@ plot_germany_stages <- function(mc, germany_name = "Germany") {
 # ══════════════════════════════════════════════════════════════
 
 plot_group_winners <- function(mc, teams_init) {
+  gadv_df <- mc$reach_df %>%
+    select(id, adv_prob = `Round of 32`)
+
   df <- mc$gwin_df %>%
-    filter(win_prob > 0.005) %>%
+    left_join(gadv_df, by = "id") %>%
+    filter(adv_prob > 0.01) %>%   # optional filter
     group_by(group) %>%
-    arrange(desc(win_prob)) %>%
+    arrange(desc(adv_prob)) %>%
     ungroup() %>%
-    mutate(group_label = paste("GROUP", group),
-           group_label = factor(group_label,
-                                levels = paste("GROUP", sort(unique(group)))))
+    mutate(
+      group_label = paste("GROUP", group),
+      group_label = factor(group_label,
+                           levels = paste("GROUP", sort(unique(group))))
+    )
 
   ggplot(df, aes(x = win_prob * 100,
                  y = reorder(team_name, win_prob))) +
-    geom_col(fill = LIME, colour = NA, width = 0.70) +
-    geom_text(aes(label = sprintf("%.0f%%", win_prob * 100)),
-              hjust = -0.15, colour = TEXT,
-              size = 2.65, fontface = "bold", family = FONT) +
+    geom_col(aes(x = adv_prob * 100),
+             fill = MUTED, alpha = 0.35, width = 0.75) +
+    geom_text(
+      aes(x = adv_prob * 100,
+          label = sprintf("%.0f%%", adv_prob * 100)),
+      hjust = -0.15,
+      colour = MUTED,
+      size = 2.5,
+      family = FONT
+    ) +
+    geom_col(aes(x = win_prob * 100),
+             fill = LIME, width = 0.55) +
+    geom_text(
+      aes(x = win_prob * 100,
+          label = sprintf("%.0f%%", win_prob * 100)),
+      hjust = -0.15,
+      colour = TEXT,
+      size = 2.6,
+      fontface = "bold",
+      family = FONT
+    ) +
     facet_wrap(~ group_label, scales = "free_y", ncol = 4) +
     scale_x_continuous(labels = function(x) paste0(x, "%"),
                        expand = expansion(mult = c(0, 0.32))) +
@@ -839,7 +850,8 @@ plot_group_winners <- function(mc, teams_init) {
       axis.text.x        = element_text(size = 7,   colour = MUTED),
       panel.grid.major.y = element_blank(),
       panel.spacing      = unit(0.7, "lines")
-    )
+    ) +
+    xlim(0, 105)
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -858,7 +870,7 @@ message("Saved: wc2026_germany_matrix.png")
 # ── Page 2: Monte Carlo results ──────────────────────────────
 message(sprintf("Running %d MC simulations (seed=%d)...", N_SIMS, SEED))
 mc <- run_mc(dat$teams_init, dat$hist_sd,
-             k = K, mwp = MAX_WIN_PROB,
+             k = K,
              use_hist = USE_HIST, seed_base = SEED,
              n_sims = N_SIMS)
 saveRDS(mc, "output/wc2026_mc_results.rds")
@@ -867,7 +879,6 @@ message("Building simulation result plots...")
 p1mc <- plot_germany_matrix_mc(mc, dat$teams_init,
                                germany_name = GERMANY_NAME, max_g = 5)
 
-(p1 / p1mc)
 p2a <- plot_champion_prob(mc, top_n = TOP_N)
 p2b <- plot_germany_stages(mc, germany_name = GERMANY_NAME)
 p2c <- plot_group_winners(mc, dat$teams_init)
