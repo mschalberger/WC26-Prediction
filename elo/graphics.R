@@ -1,15 +1,3 @@
-# ============================================================
-# FIFA World Cup 2026 — Monte Carlo Simulation & Plots
-# Run: Rscript wc2026_simulation.R
-#
-# install.packages(c("ggplot2","dplyr","tidyr","patchwork","scales"))
-#
-# Expects the same data/ folder structure as the Shiny app:
-#   data/teams.csv
-#   data/cache/elo.tsv, data/cache/countries.tsv
-#   data/score_dist.csv
-# ============================================================
-
 library(ggplot2)
 library(dplyr)
 library(tidyr)
@@ -18,11 +6,11 @@ library(scales)
 
 # ── CONFIG ───────────────────────────────────────────────────
 
-N_SIMS       <- 2000
+N_SIMS       <- 10000
 SEED         <- 42
 K            <- 20
-MAX_WIN_PROB <- 0.95
-USE_HIST     <- TRUE
+MAX_WIN_PROB <- 1
+USE_HIST     <- FALSE
 GERMANY_NAME <- "Germany"
 TOP_N        <- 10
 
@@ -48,22 +36,14 @@ LIME      <- "#CCFF00"
 NAVY      <- "#004659"   # --fublue
 GREEN_LT  <- "#007a30"
 RED_LT    <- "#C8102E"
-DRAW_COL  <- "#8B6914"   # warm dark ochre — readable on pale yellow
+DRAW_COL  <- "#8B6914"
 
 # Score matrix cell fills (pastel, coloured per outcome region)
 FILL_WIN  <- "#d6f5e3"   # pale green
 FILL_DRAW <- "#fdf6cc"   # pale lime/yellow
 FILL_LOSS <- "#fde8e8"   # pale red
 
-FONT <- "sans"           # swap for "Source Sans 3" if installed
-
-# ── THEME — mirrors the Shiny app's light-mode look ──────────
-#
-#  - White background, black text
-#  - Lime (#CCFF00) strip headers (like .group-header)
-#  - E0E0E0 grid / borders (like --border)
-#  - Bold uppercase strip text (like .group-header)
-#  - ko-round-title left accent replicated as plot title style
+FONT <- "sans"
 
 theme_wc <- function(base_size = 12) {
   theme_minimal(base_size = base_size) +
@@ -282,11 +262,16 @@ simulate_match <- function(elo_h, elo_a, k = 20, max_win_prob = 0.95,
 
 # ── GROUP STAGE ──────────────────────────────────────────────
 
-run_group_stage <- function(teams_df, k, mwp, use_hist, hist_sd) {
-  elo_live <- setNames(teams_df$elo, teams_df$id)
-  all_st   <- data.frame()
+run_group_stage <- function(teams_df, k, mwp, use_hist, hist_sd,
+                            germany_name = "Germany") {
+  elo_live   <- setNames(teams_df$elo, teams_df$id)
+  all_st     <- data.frame()
+  ger_scores <- list()
+
+  ger_id <- teams_df %>% filter(team_name == germany_name) %>% pull(id)
+
   for (grp in sort(unique(teams_df$group_letter))) {
-    ids  <- teams_df %>% filter(group_letter == grp) %>% pull(id)
+    ids   <- teams_df %>% filter(group_letter == grp) %>% pull(id)
     pairs <- combn(ids, 2, simplify = FALSE)
     pts <- gf <- ga <- setNames(rep(0L, 4), ids)
     for (pair in pairs) {
@@ -306,6 +291,20 @@ run_group_stage <- function(teams_df, k, mwp, use_hist, hist_sd) {
         pts[as.character(h)] <- pts[as.character(h)] + 1L
         pts[as.character(a)] <- pts[as.character(a)] + 1L
       }
+
+      # ── NEW: record if Germany is in this match ──────────────
+      if (length(ger_id) > 0 && (h %in% ger_id || a %in% ger_id)) {
+        opp_id <- ifelse(h %in% ger_id, a, h)
+        opp_nm <- teams_df %>% filter(id == opp_id) %>% pull(team_name)
+        ger_goals <- ifelse(h %in% ger_id, res$home_goals, res$away_goals)
+        opp_goals <- ifelse(h %in% ger_id, res$away_goals, res$home_goals)
+        ger_scores[[length(ger_scores) + 1]] <- data.frame(
+          opponent  = opp_nm,
+          ger_goals = ger_goals,
+          opp_goals = opp_goals
+        )
+      }
+      # ─────────────────────────────────────────────────────────
     }
     st <- data.frame(id = ids, pts = as.numeric(pts),
                      gf = as.numeric(gf), ga = as.numeric(ga)) %>%
@@ -315,9 +314,10 @@ run_group_stage <- function(teams_df, k, mwp, use_hist, hist_sd) {
       left_join(teams_df %>% select(id, team_name, fifa_code), by = "id")
     all_st <- rbind(all_st, st)
   }
-  list(standings = all_st, elo_live = elo_live)
+  list(standings  = all_st,
+       elo_live   = elo_live,
+       ger_scores = bind_rows(ger_scores))
 }
-
 # ── KNOCKOUT ─────────────────────────────────────────────────
 
 run_knockout <- function(pairs, elo_live, teams_df, k, mwp, use_hist, hist_sd) {
@@ -343,9 +343,11 @@ run_knockout <- function(pairs, elo_live, teams_df, k, mwp, use_hist, hist_sd) {
 # ── SINGLE TOURNAMENT ────────────────────────────────────────
 
 run_tournament <- function(teams_init, hist_sd, seed = NULL,
-                           k = 20, mwp = 0.95, use_hist = FALSE) {
+                           k = 20, mwp = 0.95, use_hist = FALSE,
+                           germany_name = "Germany") {
   if (!is.null(seed)) set.seed(seed)
-  gs  <- run_group_stage(teams_init, k, mwp, use_hist, hist_sd)
+  gs  <- run_group_stage(teams_init, k, mwp, use_hist, hist_sd,
+                         germany_name = germany_name)
   std <- gs$standings
   el  <- gs$elo_live
 
@@ -388,13 +390,15 @@ run_tournament <- function(teams_init, hist_sd, seed = NULL,
        group_out   = c(std %>% filter(rank == 4) %>% pull(id), thirds_out),
        r32_losers  = r32$losers, r16_losers = r16$losers,
        qf_losers   = qf$losers,  sf_losers  = sf$losers,
-       finalist    = fin$losers[1], champion = fin$winners[1])
+       finalist    = fin$losers[1], champion = fin$winners[1],
+       ger_scores  = gs$ger_scores)
 }
 
 # ── MONTE CARLO ──────────────────────────────────────────────
 
 run_mc <- function(n_sims, teams_init, hist_sd,
-                   k = 20, mwp = 0.95, use_hist = TRUE, seed_base = 42) {
+                   k = 20, mwp = 0.95, use_hist = TRUE, seed_base = 42,
+                   germany_name = "Germany") {
   message(sprintf("Running %d simulations...", n_sims))
   all_ids <- teams_init$id
   stages  <- c("Group Stage","Round of 32","Round of 16",
@@ -405,11 +409,14 @@ run_mc <- function(n_sims, teams_init, hist_sd,
   gwin      <- matrix(0L, nrow=length(all_ids), ncol=length(grp_ltrs),
                       dimnames=list(as.character(all_ids), grp_ltrs))
 
+  all_ger_scores <- list()   # ← NEW
+
   set.seed(seed_base); seeds <- sample.int(1e6, n_sims)
   for (sim in seq_len(n_sims)) {
     if (sim %% 500 == 0) message(sprintf("  sim %d / %d", sim, n_sims))
-    r <- run_tournament(teams_init, hist_sd, seed=seeds[sim],
-                        k=k, mwp=mwp, use_hist=use_hist)
+    r <- run_tournament(teams_init, hist_sd, seed = seeds[sim],
+                        k = k, mwp = mwp, use_hist = use_hist,
+                        germany_name = germany_name)
     for (id in as.character(r$group_out))
       elim[id,"Group Stage"]   <- elim[id,"Group Stage"]   + 1L
     for (id in as.character(r$r32_losers))
@@ -431,7 +438,12 @@ run_mc <- function(n_sims, teams_init, hist_sd,
       if (gid %in% rownames(gwin) && gl %in% colnames(gwin))
         gwin[gid, gl] <- gwin[gid, gl] + 1L
     }
+    if (!is.null(r$ger_scores) && nrow(r$ger_scores) > 0)
+      all_ger_scores[[sim]] <- r$ger_scores
+    # ─────────
   }
+
+  ger_scores_df <- bind_rows(all_ger_scores)
 
   # P(reach >= stage)
   rp <- matrix(0, nrow=length(all_ids), ncol=length(stages),
@@ -455,8 +467,11 @@ run_mc <- function(n_sims, teams_init, hist_sd,
     filter(group_col == group_letter) %>%
     select(id, team_name, fifa_code, group=group_letter, win_prob)
 
-  list(reach_df=reach_df, gwin_df=gwin_df, n_sims=n_sims)
-}
+  list(reach_df      = reach_df,
+       gwin_df       = gwin_df,
+       ger_scores_df = ger_scores_df,
+       n_sims        = n_sims)
+  }
 
 # ══════════════════════════════════════════════════════════════
 # PLOT 1 — Germany Group Score Matrices  (ANALYTICAL)
@@ -591,6 +606,125 @@ plot_germany_matrix <- function(teams_init, hist_sd,
 }
 
 # ══════════════════════════════════════════════════════════════
+# PLOT 1b — Germany Group Score Matrices  (MONTE CARLO / POISSON)
+#
+# Frequencies come directly from simulated scorelines stored
+# during run_mc → run_tournament → run_group_stage.
+# Each cell = share of simulations producing that exact score.
+# ══════════════════════════════════════════════════════════════
+
+plot_germany_matrix_mc <- function(mc, teams_init,
+                                   germany_name = "Germany", max_g = 5) {
+
+  ger_g <- teams_init %>%
+    filter(team_name == germany_name) %>%
+    pull(group_letter)
+
+  opps <- teams_init %>%
+    filter(group_letter == ger_g, team_name != germany_name)
+
+  plots <- lapply(seq_len(nrow(opps)), function(i) {
+
+    opp_nm <- opps$team_name[i]
+
+    # ── Frequency table from MC runs ──
+    raw <- mc$ger_scores_df %>%
+      filter(opponent == opp_nm) %>%
+      count(ger_goals, opp_goals, name = "n")
+
+    n_total <- sum(raw$n)   # = mc$n_sims (one match per sim)
+
+    dist <- raw %>%
+      mutate(prob = n / n_total) %>%
+      filter(ger_goals <= max_g, opp_goals <= max_g)
+
+    grid <- expand.grid(ger_goals = 0:max_g, opp_goals = 0:max_g) %>%
+      left_join(dist, by = c("ger_goals", "opp_goals")) %>%
+      mutate(
+        prob   = ifelse(is.na(prob), 0, prob),
+        result = case_when(
+          ger_goals > opp_goals ~ "WIN",
+          ger_goals < opp_goals ~ "LOSS",
+          TRUE                  ~ "DRAW"
+        ),
+        label  = ifelse(prob >= 0.005,
+                        sprintf("%.1f%%", prob * 100),
+                        "<.05%")
+      )
+
+    # ── Marginal W/D/L from the same MC data ──
+    wdl_df <- grid %>%
+      group_by(result) %>%
+      summarise(prob = sum(prob), .groups = "drop") %>%
+      mutate(result = factor(result, levels = c("WIN", "DRAW", "LOSS")))
+
+    # ── Heatmap ──
+    p_heat <- ggplot(grid, aes(x = ger_goals, y = opp_goals)) +
+      geom_tile(aes(fill = prob), colour = BORDER, linewidth = 0.9) +
+      geom_text(aes(label = label),
+                colour = TEXT, size = 2.9, fontface = "bold", family = FONT) +
+      scale_fill_gradient(low = FILL_DRAW, high = LIME) +
+      scale_x_continuous(breaks = 0:max_g,
+                         expand = expansion(add = 0.52)) +
+      scale_y_continuous(breaks = 0:max_g,
+                         expand = expansion(add = 0.52)) +
+      labs(
+        title = sprintf("Germany  vs  %s  (MC)", opp_nm),
+        x     = "Germany Goals",
+        y     = sprintf("%s Goals", opp_nm)
+      ) +
+      theme(
+        panel.grid.major  = element_blank(),
+        panel.grid.minor  = element_blank(),
+        panel.background  = element_blank(),
+        plot.background   = element_blank(),
+        legend.position   = "none"
+      )
+
+    # ── W/D/L bar ──
+    p_bar <- ggplot(wdl_df, aes(x = 1, y = prob, fill = result)) +
+      geom_col(width = 0.6) +
+      geom_text(
+        aes(label = paste0(round(prob * 100), "%")),
+        position = position_stack(vjust = 0.5),
+        size = 3, colour = "black"
+      ) +
+      coord_flip() +
+      scale_fill_manual(
+        values = c("WIN" = LIME, "DRAW" = FILL_DRAW, "LOSS" = RED_LT),
+        name   = NULL
+      ) +
+      theme(
+        panel.grid.major  = element_blank(),
+        panel.grid.minor  = element_blank(),
+        panel.background  = element_blank(),
+        plot.background   = element_blank(),
+        axis.text         = element_blank(),
+        axis.ticks        = element_blank(),
+        axis.title        = element_blank(),
+        legend.position   = "none"
+      )
+
+    p_heat / p_bar + plot_layout(heights = c(4, 1))
+  })
+
+  wrap_plots(plots, nrow = 1) +
+    plot_annotation(
+      title    = "Germany — Group Stage Score Probability Matrix  (Monte Carlo)",
+      subtitle = sprintf(
+        "%s simulations  ·  Poisson + ELO model  ·  frequencies from simulated scorelines",
+        format(mc$n_sims, big.mark = ",")),
+      theme = theme(
+        plot.title    = element_text(colour = TEXT,  size = 15, face = "bold",
+                                     family = FONT,  margin = margin(b = 4)),
+        plot.subtitle = element_text(colour = MUTED, size = 9,  family = FONT,
+                                     margin = margin(b = 6)),
+        plot.margin   = margin(20, 20, 14, 20)
+      )
+    )
+}
+
+# ══════════════════════════════════════════════════════════════
 # PLOT 2a — Championship Probability  (top N, horizontal bar)
 # Style: lime bars, bold team names — mirrors app's bar aesthetic
 # ══════════════════════════════════════════════════════════════
@@ -607,9 +741,6 @@ plot_champion_prob <- function(mc, top_n = 10) {
   ggplot(df, aes(x = pct, y = team_name)) +
     # Main lime bar
     geom_col(fill = LIME, colour = NA, width = 0.65) +
-    # Navy left-edge accent (mirrors ko-round-title left border)
-    geom_col(aes(x = pmax(pct * 0.018, 0.05)), fill = NAVY,
-             colour = NA, width = 0.65) +
     geom_text(aes(label = sprintf("%.1f%%", pct)),
               hjust = -0.12, colour = TEXT,
               size = 3.7, fontface = "bold", family = FONT) +
@@ -651,8 +782,6 @@ plot_germany_stages <- function(mc, germany_name = "Germany") {
 
   ggplot(df, aes(x = stage, y = pct)) +
     geom_col(fill = LIME, colour = NA, width = 0.65) +
-    geom_col(aes(y = pmax(pct * 0.03, 0.2)), fill = NAVY,
-             colour = NA, width = 0.65) +
     geom_text(aes(label = lbl), vjust = -0.45, colour = TEXT,
               size = 3.7, fontface = "bold", family = FONT) +
     scale_x_discrete(labels = stage_lbls) +
@@ -689,8 +818,6 @@ plot_group_winners <- function(mc, teams_init) {
   ggplot(df, aes(x = win_prob * 100,
                  y = reorder(team_name, win_prob))) +
     geom_col(fill = LIME, colour = NA, width = 0.70) +
-    geom_col(aes(x = pmax(win_prob * 100 * 0.025, 0.1)), fill = NAVY,
-             colour = NA, width = 0.70) +
     geom_text(aes(label = sprintf("%.0f%%", win_prob * 100)),
               hjust = -0.15, colour = TEXT,
               size = 2.65, fontface = "bold", family = FONT) +
@@ -726,8 +853,6 @@ dat <- load_data()
 message("Building Germany score matrices (analytical, no simulation)...")
 p1 <- plot_germany_matrix(dat$teams_init, dat$hist_sd,
                           germany_name = GERMANY_NAME, max_g = 5)
-ggsave("wc2026_germany_matrix.png", p1,
-       width = 15, height = 5.5, dpi = 180, bg = BG)
 message("Saved: wc2026_germany_matrix.png")
 
 # ── Page 2: Monte Carlo results ──────────────────────────────
@@ -736,8 +861,13 @@ mc <- run_mc(dat$teams_init, dat$hist_sd,
              k = K, mwp = MAX_WIN_PROB,
              use_hist = USE_HIST, seed_base = SEED,
              n_sims = N_SIMS)
+saveRDS(mc, "output/wc2026_mc_results.rds")
 
 message("Building simulation result plots...")
+p1mc <- plot_germany_matrix_mc(mc, dat$teams_init,
+                               germany_name = GERMANY_NAME, max_g = 5)
+
+(p1 / p1mc)
 p2a <- plot_champion_prob(mc, top_n = TOP_N)
 p2b <- plot_germany_stages(mc, germany_name = GERMANY_NAME)
 p2c <- plot_group_winners(mc, dat$teams_init)
@@ -747,8 +877,8 @@ page2 <- (p2a | p2b) / p2c +
   plot_annotation(
     title    = "FIFA World Cup 2026 — Monte Carlo Simulation Results",
     subtitle = sprintf(
-      "%s simulations  ·  ELO model  ·  Historical score distribution  ·  K = %d  ·  Max win prob = %.0f%%",
-      format(mc$n_sims, big.mark=","), K, MAX_WIN_PROB*100),
+      "%s simulations  ·  ELO model  ·  Historical score distribution  ·  K = %d",
+      format(mc$n_sims, big.mark=","), K),
     caption  = "ELO source: eloratings.net  ·  Score model: historical World Cup & major tournament data",
     theme = theme(
       plot.background = element_rect(fill = BG, colour = NA),
