@@ -26,28 +26,6 @@ countries <- read.delim(countries_path, sep="\t", header=FALSE)
 ##### PLAYED MATCHES (fixed results) #####
 results_path <- "../data/cache/results.tsv"
 
-# 1. Existiert die Datei?
-file.exists(results_path)
-#> sollte TRUE sein
-
-# 2. Wie sieht der Rohinhalt aus?
-cat(readLines(results_path), sep="\n")
-#> sollte den Header + 3 Datenzeilen zeigen, Spalten durch Tabs getrennt
-
-# 3. Wie liest read.delim() das ein?
-df <- read.delim(results_path, sep="\t", header=TRUE, stringsAsFactors=FALSE)
-df
-str(df)
-#> sollte 3 Zeilen und 6 Spalten zeigen
-#> stage = character ("Group")
-#> home_id, away_id, home_goals, away_goals = integer
-#> pens_winner_id = logical ODER integer (NA wird als logisch geparsed, das ist OK)
-#> 
-#> 
-
-
-
-
 load_played_results <- function() {
   if (file.exists(results_path)) {
     read.delim(results_path, sep="\t", header=TRUE, stringsAsFactors=FALSE)
