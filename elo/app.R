@@ -23,6 +23,31 @@ if (!file.exists(elo_path) || !file.exists(countries_path)) {
 elo       <- read.delim(elo_path,       sep="\t", header=FALSE)
 countries <- read.delim(countries_path, sep="\t", header=FALSE)
 
+##### PLAYED MATCHES (fixed results) #####
+results_path <- "../data/cache/results.tsv"
+load_played_results <- function() {
+  if (file.exists(results_path)) {
+    read.delim(results_path, sep="\t", header=TRUE, stringsAsFactors=FALSE)
+  } else {
+    data.frame(stage=character(), home_id=integer(), away_id=integer(),
+               home_goals=integer(), away_goals=integer(),
+               pens_winner_id=integer(), stringsAsFactors=FALSE)
+  }
+}
+played_results <- load_played_results()
+# Order-insensitive lookup: matches (h,a) and (a,h) the same way.
+lookup_result <- function(stage_name, id_a, id_b) {
+  hit <- played_results[
+    played_results$stage == stage_name &
+      ((played_results$home_id == id_a & played_results$away_id == id_b) |
+         (played_results$home_id == id_b & played_results$away_id == id_a)), ]
+  if (nrow(hit) == 0) return(NULL)
+  hit[1, ]
+}
+
+##### End of check of existing results #####
+
+
 elo <- elo %>%
   left_join(countries, by=c("V3"="V1")) %>%
   select(country=V2.y, elo=V4) %>%
@@ -99,8 +124,23 @@ sample_hist_score <- function(p_fav, sim_outcome) {
 elo_expected <- function(ea, eb) 1 / (1 + 10^((eb - ea) / 400))
 
 simulate_match <- function(elo_home, elo_away, k = 20,
-                           use_historical = FALSE) {
-
+                           use_historical = FALSE,
+                           force_gh = NULL, force_ga = NULL) {
+  
+  # ── Fixed result (real, already-played match): bypass simulation ──
+  # ELO is NOT updated here — update_elo.R already reflects this match
+  # in the cache, so updating again would double-count.
+  if (!is.null(force_gh) && !is.null(force_ga)) {
+    outcome <- if (force_gh > force_ga) "home"
+    else if (force_gh < force_ga) "away"
+    else "draw"
+    return(list(home_goals    = force_gh,
+                away_goals    = force_ga,
+                outcome       = outcome,
+                new_elo_home  = elo_home,
+                new_elo_away  = elo_away))
+  }
+  
   # Raw win probability
   p_h <- elo_expected(elo_home, elo_away)
 
@@ -163,10 +203,63 @@ simulate_match <- function(elo_home, elo_away, k = 20,
        new_elo_away  = elo_away + k_adj * ((1 - act_h) - (1 - exp_h)))
 }
 
+# ── FIFA TIEBREAKER ──────────────────────────────────────────
+# FIFA group-stage tiebreakers in order:
+#   1. Points (overall)
+#   2. Goal difference (overall)
+#   3. Goals scored (overall)
+#   4. Points in matches between tied teams (head-to-head)
+#   5. Goal difference in head-to-head matches
+#   6. Goals scored in head-to-head matches
+# Final fallback (substitute for FIFA's "fair play" / "drawing
+# of lots", which we cannot simulate): ELO.
+rank_group_fifa <- function(standing, raw_matches) {
+  standing <- standing %>%
+    arrange(desc(pts), desc(gd), desc(gf)) %>%
+    mutate(tie_key = paste(pts, gd, gf, sep = "_"))
+  
+  resolved <- lapply(unique(standing$tie_key), function(tk) {
+    sub <- standing %>% filter(tie_key == tk)
+    if (nrow(sub) == 1) return(sub)
+    
+    tied_ids <- sub$id
+    h2h <- raw_matches %>%
+      filter(home_id %in% tied_ids, away_id %in% tied_ids)
+    
+    h2h_pts <- h2h_gf <- h2h_ga <-
+      setNames(rep(0, length(tied_ids)), as.character(tied_ids))
+    
+    for (i in seq_len(nrow(h2h))) {
+      h  <- as.character(h2h$home_id[i])
+      a  <- as.character(h2h$away_id[i])
+      gh <- h2h$home_goals[i]
+      ga_ <- h2h$away_goals[i]
+      h2h_gf[h] <- h2h_gf[h] + gh
+      h2h_ga[h] <- h2h_ga[h] + ga_
+      h2h_gf[a] <- h2h_gf[a] + ga_
+      h2h_ga[a] <- h2h_ga[a] + gh
+      if      (gh >  ga_) h2h_pts[h] <- h2h_pts[h] + 3
+      else if (gh <  ga_) h2h_pts[a] <- h2h_pts[a] + 3
+      else { h2h_pts[h] <- h2h_pts[h] + 1; h2h_pts[a] <- h2h_pts[a] + 1 }
+    }
+    
+    sub %>%
+      mutate(h2h_pts = as.numeric(h2h_pts[as.character(id)]),
+             h2h_gd  = as.numeric(h2h_gf[as.character(id)] -
+                                    h2h_ga[as.character(id)]),
+             h2h_gf  = as.numeric(h2h_gf[as.character(id)])) %>%
+      arrange(desc(h2h_pts), desc(h2h_gd), desc(h2h_gf), desc(elo)) %>%
+      select(-h2h_pts, -h2h_gd, -h2h_gf)
+  })
+  
+  bind_rows(resolved) %>%
+    select(-tie_key) %>%
+    mutate(rank = row_number())
+}
+
 # ── GROUP STAGE ──────────────────────────────────────────────
 
-run_group_stage <- function(teams_df, k = 20,
-                            use_historical = FALSE) {
+run_group_stage <- function(teams_df, k = 20,                            use_historical = FALSE) {
   elo_start <- setNames(teams_df$elo, teams_df$id)
   elo_live  <- elo_start
 
@@ -177,16 +270,32 @@ run_group_stage <- function(teams_df, k = 20,
     ids   <- teams_df %>% filter(group_letter == grp) %>% pull(id)
     pairs <- combn(ids, 2, simplify = FALSE)
     pts <- gf <- ga <- setNames(rep(0, 4), ids)
-
+    raw_grp_matches <- data.frame(home_id    = integer(),
+                                  away_id    = integer(),
+                                  home_goals = integer(),
+                                  away_goals = integer())
+    
     for (pair in pairs) {
       h <- pair[1]; a <- pair[2]
-
+      
       elo_h <- elo_live[as.character(h)]
       elo_a <- elo_live[as.character(a)]
-
-      res <- simulate_match(elo_h, elo_a, k = k,
-                            use_historical = use_historical)
-
+      
+      # Already played? Use the real result instead of simulating.
+      fixed <- lookup_result("Group", h, a)
+      if (!is.null(fixed)) {
+        if (fixed$home_id == h) {
+          fgh <- fixed$home_goals; fga <- fixed$away_goals
+        } else {
+          fgh <- fixed$away_goals; fga <- fixed$home_goals
+        }
+        res <- simulate_match(elo_h, elo_a, k = k,
+                              use_historical = use_historical,
+                              force_gh = fgh, force_ga = fga)
+      } else {
+        res <- simulate_match(elo_h, elo_a, k = k,
+                              use_historical = use_historical)
+      }
       elo_live[as.character(h)] <- res$new_elo_home
       elo_live[as.character(a)] <- res$new_elo_away
 
@@ -201,7 +310,11 @@ run_group_stage <- function(teams_df, k = 20,
         pts[as.character(h)] <- pts[as.character(h)] + 1
         pts[as.character(a)] <- pts[as.character(a)] + 1
       }
-
+      
+      raw_grp_matches <- rbind(raw_grp_matches, data.frame(
+        home_id = h, away_id = a,
+        home_goals = res$home_goals, away_goals = res$away_goals))
+      
       ht <- teams_df %>% filter(id == h)
       at <- teams_df %>% filter(id == a)
       all_matches <- rbind(all_matches, data.frame(
@@ -230,17 +343,38 @@ sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
                          use_historical = FALSE) {
   elo_h <- elo_live[as.character(id_a)]
   elo_a <- elo_live[as.character(id_b)]
-
-  res  <- simulate_match(elo_h, elo_a, k = k,
-                         use_historical = use_historical)
+  
+  # Already played? Use the real result instead of simulating.
+  fixed <- lookup_result(round_name, id_a, id_b)
+  if (!is.null(fixed)) {
+    if (fixed$home_id == id_a) {
+      fgh <- fixed$home_goals; fga <- fixed$away_goals
+    } else {
+      fgh <- fixed$away_goals; fga <- fixed$home_goals
+    }
+    res <- simulate_match(elo_h, elo_a, k = k,
+                          use_historical = use_historical,
+                          force_gh = fgh, force_ga = fga)
+  } else {
+    res <- simulate_match(elo_h, elo_a, k = k,
+                          use_historical = use_historical)
+  }
+  
   pens <- ""
   if (res$outcome == "draw") {
-    pa     <- elo_expected(elo_h, elo_a)
-    winner <- ifelse(runif(1) < pa, id_a, id_b)
-    pens   <- " (pens)"
+    pens <- " (pens)"
+    if (!is.null(fixed) && !is.na(fixed$pens_winner_id)) {
+      winner <- fixed$pens_winner_id
+    } else {
+      pa     <- elo_expected(elo_h, elo_a)
+      winner <- ifelse(runif(1) < pa, id_a, id_b)
+    }
   } else {
     winner <- ifelse(res$outcome == "home", id_a, id_b)
   }
+    
+  
+  
   loser <- ifelse(winner == id_a, id_b, id_a)
 
   elo_live[as.character(id_a)] <- res$new_elo_home
@@ -279,16 +413,16 @@ run_knockout <- function(pairs, elo_live, teams_df,
 run_tournament <- function(seed = NULL, k = 20,
                            use_historical = FALSE) {
   if (!is.null(seed)) set.seed(seed)
+  played_results <<- load_played_results()  # refresh from disk
   teams_df <- teams_init
-
   gs       <- run_group_stage(teams_df, k = k,
                               use_historical = use_historical)
   elo_live <- gs$elo_live
   std      <- gs$standings
 
   thirds <- std %>% filter(rank == 3) %>%
-    arrange(desc(pts), desc(gd), desc(gf)) %>% slice(1:8)
-
+    arrange(desc(pts), desc(gd), desc(gf), desc(elo)) %>% slice(1:8)
+  
   get_t <- function(grp, rnk) std %>% filter(group == grp, rank == rnk) %>% pull(id)
 
   r32_pairs <- list(
