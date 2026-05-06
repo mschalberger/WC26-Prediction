@@ -73,43 +73,6 @@ if (length(missing) > 0) {
     mutate(elo = ifelse(is.na(elo), median(elo, na.rm=TRUE), elo))
 }
 
-# ── Deutsche Ländernamen (Mapping per FIFA-Code) ────────────
-# Wird ausschließlich für die Anzeige in der UI verwendet.
-# Die englische team_name-Spalte bleibt bestehen, weil sie für
-# den ELO-Join (matching gegen World Football Elo Ratings) nötig ist.
-team_name_de_map <- c(
-  MEX="Mexiko", RSA="Südafrika", KOR="Südkorea", CZE="Tschechien",
-  CAN="Kanada", BIH="Bosnien-Herzegowina", QAT="Katar", SUI="Schweiz",
-  BRA="Brasilien", MAR="Marokko", HAI="Haiti", SCO="Schottland",
-  USA="USA", PAR="Paraguay", AUS="Australien", TUR="Türkei",
-  GER="Deutschland", CUR="Curaçao", CIV="Elfenbeinküste", ECU="Ecuador",
-  NED="Niederlande", JPN="Japan", SWE="Schweden", TUN="Tunesien",
-  BEL="Belgien", EGY="Ägypten", IRN="Iran", NZL="Neuseeland",
-  ESP="Spanien", CPV="Kap Verde", KSA="Saudi-Arabien", URU="Uruguay",
-  FRA="Frankreich", SEN="Senegal", IRQ="Irak", NOR="Norwegen",
-  ARG="Argentinien", ALG="Algerien", AUT="Österreich", JOR="Jordanien",
-  POR="Portugal", COD="DR Kongo", UZB="Usbekistan", COL="Kolumbien",
-  ENG="England", CRO="Kroatien", GHA="Ghana", PAN="Panama"
-)
-
-teams_init <- teams_init %>%
-  mutate(team_name_de = ifelse(fifa_code %in% names(team_name_de_map),
-                               team_name_de_map[fifa_code],
-                               team_name))   # fallback: englischer Name
-
-# ── KO-Runden auf Deutsch (für UI-Anzeige) ──────────────────
-# Interne stage-Strings bleiben englisch, weil results.tsv
-# darauf basiert; übersetzt wird nur beim Rendern.
-stage_de_map <- c(
-  "Group"         = "Gruppe",
-  "Round of 32"   = "Sechzehntelfinale",
-  "Round of 16"   = "Achtelfinale",
-  "Quarter-Final" = "Viertelfinale",
-  "Semi-Final"    = "Halbfinale",
-  "Third Place"   = "Spiel um Platz 3",
-  "Final"         = "Finale"
-)
-
 # Flag emoji lookup
 flag_map <- c(MEX="🇲🇽",RSA="🇿🇦",KOR="🇰🇷",CZE="🇨🇿",CAN="🇨🇦",BIH="🇧🇦",QAT="🇶🇦",
               SUI="🇨🇭",BRA="🇧🇷",MAR="🇲🇦",HAI="🇭🇹",SCO="🏴󠁧󠁢󠁳󠁣󠁴󠁿",USA="🇺🇸",PAR="🇵🇾",
@@ -148,47 +111,14 @@ sample_hist_score <- function(p_fav, sim_outcome) {
   list(fav_goals = fav_goals, und_goals = und_goals)
 }
 
-# ── SIMULATION PARAMETERS ────────────────────────────────────
-# Zentraler Container für alle Tuning-Parameter der Simulation.
-# Defaults = aktuelles Verhalten der App (vor Einführung der Schalter).
-# Wird durch die ganze Aufrufkette gereicht, damit keine Funktion
-# eine lange Argumentliste braucht.
-default_params <- list(
-  k                = 20,    # ELO-Lerngeschwindigkeit
-  use_historical   = FALSE, # FALSE = Poisson, TRUE = empirische Tor-Verteilung
-  home_advantage   = 0,     # ELO-Bonus für USA/CAN/MEX (0 = kein Heimvorteil)
-  team_boost_id    = NA,    # team$id der Mannschaft, die den Bonus erhält
-  team_boost_value = 0,     # ELO-Bonus für das gewählte Team
-  goal_scale       = 1.0,   # Multiplikator auf Poisson-λ (1 = original)
-  draw_scale       = 1.0,   # Multiplikator auf Sigma der Draw-Glockenkurve
-  upset_factor     = 1.0    # Skalierung von (p_h - 0.5); 0 = alles 50/50
-)
-
-# Wendet die ELO-Modifier (Heimvorteil + Team-Boost) auf den
-# Mannschaftsdataframe an. Wird einmal pro Turnier vor Anpfiff gerufen.
-apply_elo_modifiers <- function(teams_df, params) {
-  if (params$home_advantage != 0) {
-    hosts <- c("USA", "CAN", "MEX")
-    teams_df <- teams_df %>%
-      mutate(elo = ifelse(fifa_code %in% hosts,
-                          elo + params$home_advantage, elo))
-  }
-  if (!is.na(params$team_boost_id) && params$team_boost_value != 0) {
-    teams_df <- teams_df %>%
-      mutate(elo = ifelse(id == params$team_boost_id,
-                          elo + params$team_boost_value, elo))
-  }
-  teams_df
-}
-
 # ── ELO ENGINE ───────────────────────────────────────────────
 
 elo_expected <- function(ea, eb) 1 / (1 + 10^((eb - ea) / 400))
 
-simulate_match <- function(elo_home, elo_away,
-                           params = default_params,
+simulate_match <- function(elo_home, elo_away, k = 20,
+                           use_historical = FALSE,
                            force_gh = NULL, force_ga = NULL) {
-
+  
   # ── Fixed result (real, already-played match): bypass simulation ──
   # ELO is NOT updated here — update_elo.R already reflects this match
   # in the cache, so updating again would double-count.
@@ -202,18 +132,11 @@ simulate_match <- function(elo_home, elo_away,
                 new_elo_home  = elo_home,
                 new_elo_away  = elo_away))
   }
+  
+  # Raw win probability
+  p_h <- elo_expected(elo_home, elo_away)
 
-  # Raw win probability (für ELO-Update später unverändert nötig)
-  p_raw <- elo_expected(elo_home, elo_away)
-
-  # ── Underdog-Faktor: skaliert die Abweichung von 50/50 ──
-  # 1.0 = original, 0 = alle Spiele 50/50, 2 = doppelt so deutliche Favoriten
-  p_h <- 0.5 + (p_raw - 0.5) * params$upset_factor
-  p_h <- min(max(p_h, 0.001), 0.999)
-
-  # ── Unentschieden-Häufigkeit: skaliert Sigma der Glockenkurve ──
-  sigma  <- 0.236875 * params$draw_scale
-  draw_p <- 1/3 * exp(-((p_h - .5)^2) / (2 * sigma^2))
+  draw_p <- 1/3 * exp(-((p_h - .5)^2) / (2 * 0.236875^2))
   ph <- p_h * (1 - draw_p)
   pa <- (1 - p_h) * (1 - draw_p)
 
@@ -234,7 +157,7 @@ simulate_match <- function(elo_home, elo_away,
   }
 
   used_historical <- FALSE
-  if (params$use_historical) {
+  if (use_historical) {
     sc <- sample_hist_score(p_fav, sim_outcome)
     if (!is.null(sc)) {
       # Map favourite/underdog goals back to the actual home/away teams
@@ -246,9 +169,8 @@ simulate_match <- function(elo_home, elo_away,
 
   if (!used_historical) {
     # ── Poisson score sampling (original / fallback) ───────
-    # Torreichtum: Multiplikator auf Lambda (1 = original WM-Niveau)
-    lh <- (1.99419 * ph + 0.24629) * params$goal_scale
-    la <- (1.99419 * pa + 0.24629) * params$goal_scale
+    lh <- 1.99419  * ph + 0.24629
+    la <- 1.99419  * pa + 0.24629
     repeat {
       gh <- rpois(1, lh); ga <- rpois(1, la)
       if (outcome == "home" && gh > ga) break
@@ -258,13 +180,13 @@ simulate_match <- function(elo_home, elo_away,
   }
 
   act_h    <- ifelse(outcome == "home", 1, ifelse(outcome == "draw", 0.5, 0))
-  exp_h    <- p_raw                                # ELO-Update mit Roh-Probability
+  exp_h    <- elo_expected(elo_home, elo_away)   # use raw p for ELO update
   goal_diff <- abs(gh - ga)
   k_mult   <- if (goal_diff <= 1) 1
   else if (goal_diff == 2) 1.5
   else if (goal_diff == 3) 1.75
   else 1.75 + (goal_diff - 3) / 8
-  k_adj <- params$k * k_mult
+  k_adj <- k * k_mult
 
   list(home_goals    = gh,
        away_goals    = ga,
@@ -329,7 +251,7 @@ rank_group_fifa <- function(standing, raw_matches) {
 
 # ── GROUP STAGE ──────────────────────────────────────────────
 
-run_group_stage <- function(teams_df, params = default_params) {
+run_group_stage <- function(teams_df, k = 20,                            use_historical = FALSE) {
   elo_start <- setNames(teams_df$elo, teams_df$id)
   elo_live  <- elo_start
 
@@ -359,10 +281,12 @@ run_group_stage <- function(teams_df, params = default_params) {
         } else {
           fgh <- fixed$away_goals; fga <- fixed$home_goals
         }
-        res <- simulate_match(elo_h, elo_a, params = params,
+        res <- simulate_match(elo_h, elo_a, k = k,
+                              use_historical = use_historical,
                               force_gh = fgh, force_ga = fga)
       } else {
-        res <- simulate_match(elo_h, elo_a, params = params)
+        res <- simulate_match(elo_h, elo_a, k = k,
+                              use_historical = use_historical)
       }
       elo_live[as.character(h)] <- res$new_elo_home
       elo_live[as.character(a)] <- res$new_elo_away
@@ -387,8 +311,8 @@ run_group_stage <- function(teams_df, params = default_params) {
       at <- teams_df %>% filter(id == a)
       all_matches <- rbind(all_matches, data.frame(
         stage  = "Group", group = grp,
-        home   = paste(get_flag(ht$fifa_code), ht$team_name_de),
-        away   = paste(get_flag(at$fifa_code), at$team_name_de),
+        home   = paste(get_flag(ht$fifa_code), ht$team_name),
+        away   = paste(get_flag(at$fifa_code), at$team_name),
         score  = paste0(res$home_goals, "-", res$away_goals),
         result = res$outcome, stringsAsFactors = FALSE))
     }
@@ -398,7 +322,7 @@ run_group_stage <- function(teams_df, params = default_params) {
       mutate(gd = gf - ga, elo = elo_live[as.character(ids)]) %>%
       arrange(desc(pts), desc(gd), desc(gf), desc(elo)) %>%
       mutate(rank = 1:4, group = grp) %>%
-      left_join(teams_df %>% select(id, team_name_de, fifa_code), by = "id")
+      left_join(teams_df %>% select(id, team_name, fifa_code), by = "id")
     all_standings <- rbind(all_standings, standing)
   }
   list(standings = all_standings, matches = all_matches, elo_live = elo_live)
@@ -407,7 +331,8 @@ run_group_stage <- function(teams_df, params = default_params) {
 # ── KNOCKOUT ─────────────────────────────────────────────────
 
 sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
-                         round_name, params = default_params) {
+                         round_name, k = 20,
+                         use_historical = FALSE) {
   elo_h <- elo_live[as.character(id_a)]
   elo_a <- elo_live[as.character(id_b)]
   
@@ -419,15 +344,17 @@ sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
     } else {
       fgh <- fixed$away_goals; fga <- fixed$home_goals
     }
-    res <- simulate_match(elo_h, elo_a, params = params,
+    res <- simulate_match(elo_h, elo_a, k = k,
+                          use_historical = use_historical,
                           force_gh = fgh, force_ga = fga)
   } else {
-    res <- simulate_match(elo_h, elo_a, params = params)
+    res <- simulate_match(elo_h, elo_a, k = k,
+                          use_historical = use_historical)
   }
   
   pens <- ""
   if (res$outcome == "draw") {
-    pens <- " (i. E.)"
+    pens <- " (pens)"
     if (!is.null(fixed) && !is.na(fixed$pens_winner_id)) {
       winner <- fixed$pens_winner_id
     } else {
@@ -450,19 +377,21 @@ sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
   tw <- teams_df %>% filter(id == winner)
   list(winner = winner, loser = loser, elo_live = elo_live,
        row = data.frame(stage  = round_name, group = "",
-                        home   = paste(get_flag(ta$fifa_code), ta$team_name_de),
-                        away   = paste(get_flag(tb$fifa_code), tb$team_name_de),
+                        home   = paste(get_flag(ta$fifa_code), ta$team_name),
+                        away   = paste(get_flag(tb$fifa_code), tb$team_name),
                         score  = paste0(res$home_goals, "-", res$away_goals, pens),
-                        result = paste("→", get_flag(tw$fifa_code), tw$team_name_de),
+                        result = paste("→", get_flag(tw$fifa_code), tw$team_name),
                         stringsAsFactors = FALSE))
 }
 
 run_knockout <- function(pairs, elo_live, teams_df,
-                         round_name, params = default_params) {
+                         round_name, k = 20,
+                         use_historical = FALSE) {
   winners <- c(); losers <- c(); rows <- data.frame()
   for (pair in pairs) {
     res      <- sim_ko_match(pair[1], pair[2], elo_live, teams_df,
-                             round_name, params = params)
+                             round_name, k = k,
+                             use_historical = use_historical)
     elo_live <- res$elo_live
     winners  <- c(winners, res$winner)
     losers   <- c(losers,  res$loser)
@@ -473,14 +402,13 @@ run_knockout <- function(pairs, elo_live, teams_df,
 
 # ── TOURNAMENT ───────────────────────────────────────────────
 
-run_tournament <- function(seed = NULL, params = default_params) {
+run_tournament <- function(seed = NULL, k = 20,
+                           use_historical = FALSE) {
   if (!is.null(seed)) set.seed(seed)
   played_results <<- load_played_results()  # refresh from disk
-
-  # Heimvorteil + Team-Boost VOR Turnierstart auf ELO-Werte aufschlagen
-  teams_df <- apply_elo_modifiers(teams_init, params)
-
-  gs       <- run_group_stage(teams_df, params = params)
+  teams_df <- teams_init
+  gs       <- run_group_stage(teams_df, k = k,
+                              use_historical = use_historical)
   elo_live <- gs$elo_live
   std      <- gs$standings
 
@@ -508,7 +436,9 @@ run_tournament <- function(seed = NULL, params = default_params) {
     c(get_t("K",1), thirds$id[8])
   )
 
-  ko_args <- list(elo_live = elo_live, teams_df = teams_df, params = params)
+  ko_args <- list(elo_live = elo_live, teams_df = teams_df,
+                  k = k,
+                  use_historical = use_historical)
 
   r32 <- do.call(run_knockout, c(list(pairs = r32_pairs, round_name = "Round of 32"),   ko_args))
   ko_args$elo_live <- r32$elo_live
@@ -538,7 +468,7 @@ run_tournament <- function(seed = NULL, params = default_params) {
     id        = as.integer(names(elo_live)),
     final_elo = as.numeric(elo_live)
   ) %>%
-    left_join(teams_df %>% select(id, team_name, team_name_de, fifa_code, elo), by = "id") %>%
+    left_join(teams_df %>% select(id, team_name, fifa_code, elo), by = "id") %>%
     mutate(
       change    = round(final_elo - elo),
       final_elo = round(final_elo),
@@ -844,7 +774,7 @@ ui <- fluidPage(
       }
       body:not(.light-mode) .group-header { color: #000000; }
       body.light-mode .group-header { color: #000000; background: #CCFF00; border-bottom: 1px solid #000000; }
-      .group-table { width: 100%; border-collapse: collapse; table-layout: auto; }
+      .group-table { width: 100%; border-collapse: collapse; }
       .group-table th {
         color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
         padding: 6px 12px; text-align: right; font-weight: 400;
@@ -853,15 +783,6 @@ ui <- fluidPage(
       .group-table th:first-child { text-align: left; }
       .group-table td { padding: 8px 12px; border-top: 1px solid var(--ko-border); text-align: right; }
       .group-table td:first-child { text-align: left; }
-      /* Numerische Spalten (2–6: Pkt, Tore+, Tore−, Diff, ELO) kompakter darstellen */
-      .group-table th:nth-child(n+2),
-      .group-table td:nth-child(n+2) {
-        padding-left: 4px; padding-right: 8px;
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-      }
-      .group-table th:last-child,
-      .group-table td:last-child { padding-right: 12px; }
       .group-table tr:first-child td { border-top: none; }
       .qualify     { background: var(--qualify-bg); }
       .qualify-3rd { background: var(--qualify3-bg); }
@@ -908,71 +829,6 @@ ui <- fluidPage(
       .elo-up { color: var(--green); }
       body.light-mode .elo-up { color: #007a30; }
       .elo-dn { color: var(--red); }
-
-      /* ── EINSTELLUNGEN-BOX (permanent ausgeklappt) ── */
-      .settings-box {
-        margin: 0 0 20px 0;
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        background: var(--panel);
-        position: relative;
-        z-index: 50;          /* über Podium, damit Dropdown nicht verdeckt wird */
-      }
-      .settings-header {
-        padding: 10px 16px;
-        font-weight: 600;
-        font-size: 13px;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-        color: var(--text);
-        border-bottom: 1px solid var(--border);
-        background: var(--input-bg);
-        border-radius: 10px 10px 0 0;
-      }
-      .settings-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 14px 18px;
-        padding: 16px;
-      }
-      .settings-grid .control-group { margin: 0; }
-      .settings-footer {
-        padding: 0 16px 16px 16px;
-        display: flex;
-        justify-content: flex-end;
-      }
-      /* Sekundärer Reset-Button: dezent, klar als Rückgängig-Aktion erkennbar */
-      .btn-reset {
-        background: transparent;
-        color: var(--muted);
-        border: 1px solid var(--border);
-        padding: 8px 16px;
-        border-radius: 6px;
-        font-family: 'Source Sans 3', Arial, sans-serif;
-        font-size: 12px;
-        font-weight: 600;
-        letter-spacing: 1px;
-        text-transform: uppercase;
-        cursor: pointer;
-        transition: background 0.15s, color 0.15s, border-color 0.15s;
-      }
-      .btn-reset:hover {
-        background: var(--input-bg);
-        color: var(--text);
-        border-color: var(--text);
-      }
-      /* Zentraler Simulieren-Button außerhalb der Einstellungsbox */
-      .run-section {
-        display: flex;
-        justify-content: center;
-        margin: 0 0 24px 0;
-      }
-      .run-section .btn { min-width: 220px; }
-      /* Selectize-Dropdown muss über dem Podium liegen */
-      .selectize-dropdown { z-index: 9999 !important; }
-      .selectize-control  { position: relative; z-index: 100; }
-      /* Podium darf keinen eigenen stacking context erzeugen, der das Dropdown abschneidet */
-      .podium { position: relative; z-index: 1; }
 
       /* ── SPINNER ── */
       .loading-overlay {
@@ -1021,14 +877,14 @@ ui <- fluidPage(
 
   div(class="loading-overlay", id="loader",
       div(class="spinner"),
-      div(class="loading-text", "Turnier wird simuliert...")
+      div(class="loading-text", "Simulating Tournament...")
   ),
 
   div(class="wc-header",
       div(class="header-inner",
           div(class="header-branding",
-              p(class="wc-subtitle", "ELO-basierte Monte-Carlo-Simulation"),
-              h1(class="wc-title", "🏆 FIFA WM 2026")
+              p(class="wc-subtitle", "ELO-Based Monte Carlo Simulator"),
+              h1(class="wc-title", "🏆 FIFA World Cup 2026")
           ),
           div(style="display:flex; align-items:center; gap:20px;",
               div(class="theme-toggle", id="theme_toggle", onclick="toggleTheme()",
@@ -1047,110 +903,48 @@ ui <- fluidPage(
 
   div(class="wc-body",
 
-      # ── EINSTELLUNGEN (permanent ausgeklappt) ───────────────────
-      div(class="settings-box",
-        div(class="settings-header", "⚙️  Einstellungen"),
-        div(class="settings-grid",
+      div(class="control-bar",
 
-            # Zufallsgenerator Startwert (vormals Random Seed)
-            div(class="control-group",
-                div(class="control-label", "Zufallsgenerator Startwert"),
-                tags$input(id="seed", type="number", value="", min="1", max="99999",
-                           class="form-control", placeholder="zufällig")
-            ),
+          # Seed
+          div(class="control-group",
+              div(class="control-label", "Random Seed"),
+              tags$input(id="seed", type="number", value="", min="1", max="99999",
+                         class="form-control", placeholder="random")
+          ),
 
-            # Turnier Elo Gewicht (vormals K-Factor / Lerngeschwindigkeit)
-            div(class="control-group",
-                div(class="control-label", "Turnier Elo Gewicht"),
-                sliderInput("k_slider", label=NULL, min=0, max=60, value=20, step=5,
-                            ticks=FALSE, width="100%")
-            ),
+          # K-Factor slider
+          div(class="control-group",
+              div(class="control-label", "K-Factor"),
+              sliderInput("k_slider", label=NULL, min=0, max=60, value=20, step=5,
+                          ticks=FALSE, width="200px")
+          ),
 
-            # Tor-Modell (Poisson / Empirisch)
-            div(class="control-group score-mode-wrap",
-                div(class="control-label", "Poisson oder Empirische?"),
-                div(class="score-mode-toggle", id="score_mode_toggle",
-                    onclick="toggleScoreMode()",
-                    div(class="score-mode-track", id="score_mode_track",
-                        div(class="score-mode-thumb")
-                    ),
-                    span(class="score-mode-label", id="score_mode_label", "Poisson")
-                ),
-                tags$input(type="hidden", id="use_historical", value="0")
-            ),
 
-            # Heimvorteil USA / Kanada / Mexiko
-            div(class="control-group",
-                div(class="control-label", "Heimvorteil 🇺🇸🇨🇦🇲🇽"),
-                sliderInput("home_advantage", label=NULL,
-                            min=0, max=500, value=0, step=10,
-                            ticks=FALSE, width="100%")
-            ),
+          # ── NEW: Score mode toggle (Poisson / Historical) ─────────
+          div(class="control-group score-mode-wrap",
+              div(class="control-label", "Score Model"),
+              div(class="score-mode-toggle", id="score_mode_toggle",
+                  onclick="toggleScoreMode()",
+                  div(class="score-mode-track", id="score_mode_track",
+                      div(class="score-mode-thumb")
+                  ),
+                  span(class="score-mode-label", id="score_mode_label", "Poisson")
+                  #span(class="mode-badge",        id="score_mode_badge", "ACTIVE")
+              ),
+              # Hidden input read by Shiny
+              tags$input(type="hidden", id="use_historical", value="0")
+          ),
 
-            # Außenseiter-Faktor
-            div(class="control-group",
-                div(class="control-label", "Außenseiter-Faktor"),
-                sliderInput("upset_factor", label=NULL,
-                            min=0, max=4, value=1, step=0.1,
-                            ticks=FALSE, width="100%")
-            ),
-
-            # Torreichtum
-            div(class="control-group",
-                div(class="control-label", "Torreichtum"),
-                sliderInput("goal_scale", label=NULL,
-                            min=0.3, max=2.0, value=1.0, step=0.1,
-                            ticks=FALSE, width="100%")
-            ),
-
-            # Unentschieden-Häufigkeit
-            div(class="control-group",
-                div(class="control-label", "Unentschieden-Häufigkeit"),
-                sliderInput("draw_scale", label=NULL,
-                            min=0.3, max=5, value=1.0, step=0.1,
-                            ticks=FALSE, width="100%")
-            ),
-
-            # Team-Boost: Auswahl
-            div(class="control-group",
-                div(class="control-label", "ELO-Bonus für …"),
-                selectInput("team_boost_id", label=NULL,
-                            choices = setNames(
-                              teams_init$id,
-                              paste(sapply(teams_init$fifa_code, get_flag),
-                                    teams_init$team_name_de)
-                            ),
-                            selected = (teams_init %>%
-                                          filter(fifa_code == "GER") %>%
-                                          pull(id))[1],
-                            width="100%")
-            ),
-
-            # Team-Boost: ELO-Differenz
-            div(class="control-group",
-                div(class="control-label", "… ELO-Differenz"),
-                sliderInput("team_boost_value", label=NULL,
-                            min=-500, max=500, value=0, step=10,
-                            ticks=FALSE, width="100%")
-            )
-        ),
-        div(class="settings-footer",
-            actionButton("reset_btn", "↺  Zurücksetzen", class="btn-reset")
-        )
-      ),
-
-      # ── Simulieren-Button (zentral, außerhalb der Box) ─────────
-      div(class="run-section",
-          actionButton("run_btn", "▶  SIMULIEREN", class="btn")
+          actionButton("run_btn", "▶  SIMULATE", class="btn")
       ),
 
       uiOutput("podium_ui"),
 
       tabsetPanel(id="main_tabs",
-                  tabPanel("🏅 Gruppenübersicht", div(style="margin-top:16px;", uiOutput("groups_ui"))),
-                  tabPanel("⚽ Gruppenspiele",   div(style="margin-top:16px;", uiOutput("group_matches_ui"))),
-                  tabPanel("⚔️ K.O.-Runde",      div(style="margin-top:16px;", uiOutput("ko_ui"))),
-                  tabPanel("📊 ELO-Rangliste",    div(style="margin-top:16px;", uiOutput("elo_ui")))
+                  tabPanel("🏅 Group Standings", div(style="margin-top:16px;", uiOutput("groups_ui"))),
+                  tabPanel("⚽ Group Matches",   div(style="margin-top:16px;", uiOutput("group_matches_ui"))),
+                  tabPanel("⚔️ Knockout Stage",  div(style="margin-top:16px;", uiOutput("ko_ui"))),
+                  tabPanel("📊 ELO Rankings",    div(style="margin-top:16px;", uiOutput("elo_ui")))
       )
   ),
 
@@ -1197,7 +991,7 @@ ui <- fluidPage(
       var input = document.getElementById('use_historical');
       if (useHistorical) {
         track.classList.add('on');
-        label.textContent = 'Historisch';
+        label.textContent = 'Historical';
         badge.textContent = 'ACTIVE';
         input.value = '1';
       } else {
@@ -1217,15 +1011,6 @@ ui <- fluidPage(
     $(document).on('shiny:idle', function() {
       $('#loader').removeClass('active');
     });
-
-    /* ── Reset-Handler: setzt Seed-Feld und Tor-Modell zurück ── */
-    /* (Slider/Select werden vom Server via update*Input zurückgesetzt) */
-    $(document).on('shiny:connected', function() {
-      Shiny.addCustomMessageHandler('resetUI', function(message) {
-        document.getElementById('seed').value = '';
-        if (useHistorical) toggleScoreMode();   // zurück auf Poisson
-      });
-    });
   "))
 )
 
@@ -1234,45 +1019,19 @@ ui <- fluidPage(
 server <- function(input, output, session) {
   result <- reactiveVal(NULL)
 
-  # Run on startup with defaults (entspricht ursprünglichem Verhalten)
-  observe({ result(run_tournament(seed = 111)) })
+  # Run on startup with defaults
+  observe({ result(run_tournament(seed=111, k=20, use_historical=FALSE)) })
 
   observeEvent(input$run_btn, {
     seed <- suppressWarnings(as.integer(input$seed))
     if (is.na(seed)) seed <- as.integer(as.numeric(Sys.time())) %% .Machine$integer.max
 
-    # UI-Werte in params-Liste übersetzen.
-    # Alle Defaults entsprechen dem Originalverhalten der App.
-    user_params <- modifyList(default_params, list(
-      k                = as.integer(input$k_slider %||% 20),
-      use_historical   = isTRUE(input$use_historical == "1"),
-      home_advantage   = as.numeric(input$home_advantage   %||% 0),
-      team_boost_id    = as.integer(input$team_boost_id    %||% NA),
-      team_boost_value = as.numeric(input$team_boost_value %||% 0),
-      goal_scale       = as.numeric(input$goal_scale       %||% 1.0),
-      draw_scale       = as.numeric(input$draw_scale       %||% 1.0),
-      upset_factor     = as.numeric(input$upset_factor     %||% 1.0)
-    ))
+    k_val        <- as.integer(input$k_slider %||% 20)
+    use_hist     <- isTRUE(input$use_historical == "1")
 
-    result(run_tournament(seed = seed, params = user_params))
-  })
-
-  # ── Zurücksetzen-Button: alle Einstellungen auf Default ──
-  # Default-Werte stammen aus default_params (siehe Datei-Anfang).
-  # JS-Anteil (Seed-Feld leeren, Tor-Modell-Toggle zurücksetzen)
-  # läuft über Custom Message, weil beides nicht über Shiny-Inputs läuft.
-  observeEvent(input$reset_btn, {
-    updateSliderInput(session, "k_slider",         value = default_params$k)
-    updateSliderInput(session, "home_advantage",   value = default_params$home_advantage)
-    updateSliderInput(session, "upset_factor",     value = default_params$upset_factor)
-    updateSliderInput(session, "goal_scale",       value = default_params$goal_scale)
-    updateSliderInput(session, "draw_scale",       value = default_params$draw_scale)
-    updateSliderInput(session, "team_boost_value", value = default_params$team_boost_value)
-    updateSelectInput(session, "team_boost_id",
-                      selected = (teams_init %>%
-                                    filter(fifa_code == "GER") %>%
-                                    pull(id))[1])
-    session$sendCustomMessage("resetUI", list())
+    result(run_tournament(seed           = seed,
+                          k              = k_val,
+                          use_historical = use_hist))
   })
 
   # ── Podium ──
@@ -1286,20 +1045,20 @@ server <- function(input, output, session) {
           div(class="podium-label", label),
           tags$span(class="trophy", trophy),
           tags$span(class="podium-flag", get_flag(team$fifa_code)),
-          div(class="podium-team", team$team_name_de),
+          div(class="podium-team", team$team_name),
           div(style="color:var(--muted);font-size:11px;margin-top:4px;",
               paste("ELO:", round(elo_val)))
       )
     }
 
     tagList(div(class="podium",
-                make_card(runner, "second", "Zweiter Platz", "🥈"),
-                make_card(champ,  "first",  "Weltmeister",   "🏆"),
-                make_card(third,  "third",  "Dritter Platz", "🥉")
+                make_card(runner, "second", "Runner-Up",   "🥈"),
+                make_card(champ,  "first",  "Champion",    "🏆"),
+                make_card(third,  "third",  "Third Place", "🥉")
     ))
   })
 
-  # ── Gruppen-Tabellen ──
+  # ── Group Standings ──
   output$groups_ui <- renderUI({
     r <- result(); req(r)
     std <- r$standings
@@ -1313,7 +1072,7 @@ server <- function(input, output, session) {
         gd_str <- if (gd_val > 0) paste0("+", gd_val) else as.character(gd_val)
         tags$tr(class=cls,
                 tags$td(tags$span(class=paste("rank-badge", paste0("rank-", i)), i),
-                        get_flag(row$fifa_code), " ", row$team_name_de),
+                        get_flag(row$fifa_code), " ", row$team_name),
                 tags$td(class="pts-cell", row$pts),
                 tags$td(row$gf), tags$td(row$ga),
                 tags$td(class=gd_cls, gd_str),
@@ -1321,11 +1080,11 @@ server <- function(input, output, session) {
         )
       })
       div(class="group-card",
-          div(class="group-header", paste("GRUPPE", grp)),
+          div(class="group-header", paste("GROUP", grp)),
           tags$table(class="group-table",
                      tags$thead(tags$tr(
-                       tags$th("Team"), tags$th("Pkt"), tags$th("Tore+"),
-                       tags$th("Tore−"), tags$th("Diff"), tags$th("ELO")
+                       tags$th("Team"), tags$th("Pts"), tags$th("GF"),
+                       tags$th("GA"), tags$th("GD"), tags$th("ELO")
                      )),
                      tags$tbody(rows)
           )
@@ -1334,7 +1093,7 @@ server <- function(input, output, session) {
     div(class="groups-grid", cards)
   })
 
-  # ── Gruppenspiele ──
+  # ── Group Matches ──
   output$group_matches_ui <- renderUI({
     r <- result(); req(r)
     gm <- r$group_matches
@@ -1345,10 +1104,10 @@ server <- function(input, output, session) {
         tags$tr(tags$td(m$home), tags$td(class="ko-score", m$score), tags$td(m$away))
       })
       div(class="ko-section",
-          div(class="ko-round-title", paste("Gruppe", grp)),
+          div(class="ko-round-title", paste("Group", grp)),
           tags$table(class="ko-table",
                      tags$thead(tags$tr(
-                       tags$th("Heim"), tags$th(style="text-align:center","Ergebnis"), tags$th("Auswärts")
+                       tags$th("Home"), tags$th(style="text-align:center","Score"), tags$th("Away")
                      )),
                      tags$tbody(rows)
           )
@@ -1357,7 +1116,7 @@ server <- function(input, output, session) {
     div(sections)
   })
 
-  # ── K.O.-Runde ──
+  # ── Knockout Stage ──
   output$ko_ui <- renderUI({
     r <- result(); req(r)
     ko     <- r$ko_matches
@@ -1371,11 +1130,11 @@ server <- function(input, output, session) {
                 tags$td(m$away), tags$td(class="ko-winner", m$result))
       })
       div(class="ko-section",
-          div(class="ko-round-title", stage_de_map[rnd]),
+          div(class="ko-round-title", rnd),
           tags$table(class="ko-table",
                      tags$thead(tags$tr(
-                       tags$th("Heim / Team A"), tags$th(style="text-align:center","Ergebnis"),
-                       tags$th("Auswärts / Team B"), tags$th("Sieger")
+                       tags$th("Home / Team A"), tags$th(style="text-align:center","Score"),
+                       tags$th("Away / Team B"), tags$th("Winner")
                      )),
                      tags$tbody(rows)
           )
@@ -1384,7 +1143,7 @@ server <- function(input, output, session) {
     div(sections)
   })
 
-  # ── ELO-Rangliste ──
+  # ── ELO Rankings ──
   output$elo_ui <- renderUI({
     r <- result(); req(r)
     fe      <- r$final_elo
@@ -1399,7 +1158,7 @@ server <- function(input, output, session) {
       medal   <- if (i == 1) "🥇" else if (i == 2) "🥈" else if (i == 3) "🥉" else as.character(i)
       tags$tr(
         tags$td(medal),
-        tags$td(paste(row$flag, row$team_name_de)),
+        tags$td(paste(row$flag, row$team_name)),
         tags$td(style="font-family:monospace;font-weight:600;color:var(--gold);", row$final_elo),
         tags$td(class=chg_cls, style="font-family:monospace;", chg_str),
         tags$td(style="font-family:monospace;color:var(--muted);", round(row$start_elo)),
@@ -1410,8 +1169,8 @@ server <- function(input, output, session) {
 
     tags$table(class="ko-table",
                tags$thead(tags$tr(
-                 tags$th("#"), tags$th("Team"), tags$th("End-ELO"),
-                 tags$th("Änderung"), tags$th("Start-ELO"), tags$th("Stärke")
+                 tags$th("#"), tags$th("Team"), tags$th("Final ELO"),
+                 tags$th("Change"), tags$th("Start ELO"), tags$th("Strength")
                )),
                tags$tbody(rows)
     )
