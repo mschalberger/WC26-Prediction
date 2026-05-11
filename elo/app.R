@@ -8,6 +8,11 @@ library(shiny)
 library(dplyr)
 library(DT)
 
+# Null-coalescing helper: gibt a zurück, wenn nicht-NULL und nicht-leer,
+# sonst b. Muss VOR der ersten Verwendung definiert sein (wird sowohl
+# beim UI-Aufbau als auch im Server-Code benutzt).
+`%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
+
 # ── DATA ─────────────────────────────────────────────────────
 
 matches <- read.csv("../data/matches.csv")
@@ -154,18 +159,19 @@ sample_hist_score <- function(p_fav, sim_outcome) {
 # Wird durch die ganze Aufrufkette gereicht, damit keine Funktion
 # eine lange Argumentliste braucht.
 default_params <- list(
-  k                = 20,    # ELO-Lerngeschwindigkeit
-  use_historical   = FALSE, # FALSE = Poisson, TRUE = empirische Tor-Verteilung
-  home_advantage   = 0,     # ELO-Bonus für USA/CAN/MEX (0 = kein Heimvorteil)
-  team_boost_id    = NA,    # team$id der Mannschaft, die den Bonus erhält
-  team_boost_value = 0,     # ELO-Bonus für das gewählte Team
-  goal_scale       = 1.0,   # Multiplikator auf Poisson-λ (1 = original)
-  draw_scale       = 1.0,   # Multiplikator auf Sigma der Draw-Glockenkurve
-  upset_factor     = 1.0    # Skalierung von (p_h - 0.5); 0 = alles 50/50
+  k                 = 20,    # ELO-Lerngeschwindigkeit
+  use_historical    = FALSE, # FALSE = Poisson, TRUE = empirische Tor-Verteilung
+  home_advantage    = 0,     # ELO-Bonus für USA/CAN/MEX (0 = kein Heimvorteil)
+  team_boost_id     = NA,    # team$id der Mannschaft, die den Bonus erhält
+  team_boost_value  = 0,     # ELO-Bonus für das gewählte Team
+  team_adjustments  = NULL,  # named numeric vector (id → ELO-Offset/Differenz) aus der ELO-Rangliste
+  goal_scale        = 1.0,   # Multiplikator auf Poisson-λ (1 = original)
+  draw_scale        = 1.0,   # Multiplikator auf Sigma der Draw-Glockenkurve
+  upset_factor      = 1.0    # Skalierung von (p_h - 0.5); 0 = alles 50/50
 )
 
-# Wendet die ELO-Modifier (Heimvorteil + Team-Boost) auf den
-# Mannschaftsdataframe an. Wird einmal pro Turnier vor Anpfiff gerufen.
+# Wendet die ELO-Modifier (Heimvorteil + Team-Boost + Per-Team-Adjustments)
+# auf den Mannschaftsdataframe an. Wird einmal pro Turnier vor Anpfiff gerufen.
 apply_elo_modifiers <- function(teams_df, params) {
   if (params$home_advantage != 0) {
     hosts <- c("USA", "CAN", "MEX")
@@ -177,6 +183,21 @@ apply_elo_modifiers <- function(teams_df, params) {
     teams_df <- teams_df %>%
       mutate(elo = ifelse(id == params$team_boost_id,
                           elo + params$team_boost_value, elo))
+  }
+  # Per-Team-Adjustments aus der ELO-Rangliste (additiv zu den anderen Modifiern).
+  # Werte sind Differenzen (Slider-Wert minus Original-Start-ELO).
+  if (!is.null(params$team_adjustments) && length(params$team_adjustments) > 0) {
+    adj <- params$team_adjustments
+    adj <- adj[!is.na(adj) & adj != 0]
+    if (length(adj) > 0) {
+      adj_df <- data.frame(id = as.integer(names(adj)),
+                           .adj = as.numeric(adj),
+                           stringsAsFactors = FALSE)
+      teams_df <- teams_df %>%
+        left_join(adj_df, by = "id") %>%
+        mutate(elo = elo + ifelse(is.na(.adj), 0, .adj)) %>%
+        select(-.adj)
+    }
   }
   teams_df
 }
@@ -477,7 +498,7 @@ run_tournament <- function(seed = NULL, params = default_params) {
   if (!is.null(seed)) set.seed(seed)
   played_results <<- load_played_results()  # refresh from disk
 
-  # Heimvorteil + Team-Boost VOR Turnierstart auf ELO-Werte aufschlagen
+  # Heimvorteil + Team-Boost + Per-Team-Adjustments VOR Turnierstart aufschlagen
   teams_df <- apply_elo_modifiers(teams_init, params)
 
   gs       <- run_group_stage(teams_df, params = params)
@@ -534,15 +555,22 @@ run_tournament <- function(seed = NULL, params = default_params) {
   all_ko_matches <- bind_rows(r32$matches, r16$matches, qf$matches,
                               sf$matches, tp$matches, fin$matches)
 
+  # final_elo: enthält neben final_elo (Endstand nach Turnier) und
+  # start_elo (Wert NACH Modifiern, mit dem das Turnier tatsächlich
+  # gestartet wurde) auch orig_elo (ORIGINAL aus teams_init, ohne
+  # jegliche Modifier). orig_elo ist der stabile Referenzanker für
+  # die ELO-Anpassungs-Slider in der Rangliste.
   final_elo <- data.frame(
     id        = as.integer(names(elo_live)),
     final_elo = as.numeric(elo_live)
   ) %>%
-    left_join(teams_df %>% select(id, team_name, team_name_de, fifa_code, elo), by = "id") %>%
+    left_join(teams_df   %>% select(id, team_name, team_name_de, fifa_code, elo), by = "id") %>%
+    left_join(teams_init %>% select(id, orig_elo = elo), by = "id") %>%
     mutate(
       change    = round(final_elo - elo),
       final_elo = round(final_elo),
       start_elo = round(elo),
+      orig_elo  = round(orig_elo),
       flag      = sapply(fifa_code, get_flag)
     ) %>%
     arrange(desc(final_elo)) %>%
@@ -750,39 +778,20 @@ ui <- fluidPage(
       .irs-with-grid { margin-bottom: 0 !important; }
       .form-group { margin-bottom: 0 !important; }
 
-      /* ── SCORE MODE TOGGLE ── */
-      .score-mode-wrap {
-        display: flex; flex-direction: column; gap: 6px;
+      /* ── SCORE MODE RADIO (Poisson / Empirisch) ── */
+      .score-mode-radio .shiny-options-group { margin-top: 2px; }
+      .score-mode-radio .radio { margin: 4px 0; padding: 0; }
+      .score-mode-radio .radio label {
+        font-family: 'Source Sans 3', Arial, sans-serif;
+        font-size: 13px; font-weight: 600; color: var(--text);
+        padding-left: 24px; cursor: pointer;
       }
-      .score-mode-toggle {
-        display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;
+      .score-mode-radio input[type='radio'] {
+        accent-color: var(--gold);
+        margin-right: 6px;
+        cursor: pointer;
       }
-      .score-mode-track {
-        position: relative; width: 42px; height: 22px;
-        background: #32324A; border-radius: 11px; transition: background 0.3s; flex-shrink: 0;
-      }
-      .score-mode-track.on { background: var(--gold); }
-      body.light-mode .score-mode-track { background: #CCCC00; }
-      body.light-mode .score-mode-track.on { background: #000000; }
-      .score-mode-thumb {
-        position: absolute; top: 3px; left: 3px;
-        width: 16px; height: 16px; border-radius: 50%;
-        background: #fff; transition: transform 0.3s;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-      }
-      body.light-mode .score-mode-thumb { background: #fff; }
-      .score-mode-track.on .score-mode-thumb { transform: translateX(20px); }
-      .score-mode-label {
-        font-family: 'Source Sans 3', Arial, sans-serif; font-size: 13px; font-weight: 600;
-        letter-spacing: 1px; color: var(--text); min-width: 80px;
-      }
-      /* badge shown next to current mode */
-      .mode-badge {
-        font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
-        padding: 2px 7px; border-radius: 4px; text-transform: uppercase;
-        background: var(--gold); color: #000;
-      }
-      body.light-mode .mode-badge { background: #CCFF00; color: #000; }
+      body.light-mode .score-mode-radio input[type='radio'] { accent-color: #000000; }
 
       /* ── PODIUM ── */
       .podium { display: flex; gap: 12px; margin-bottom: 24px; }
@@ -903,11 +912,47 @@ ui <- fluidPage(
       body.light-mode .ko-winner { color: #007a30; }
 
       /* ── ELO ── */
-      .elo-bar-wrap { background: var(--elo-bar-bg); border-radius: 3px; height: 6px; width: 120px; }
-      .elo-bar { background: linear-gradient(90deg, var(--navy), var(--lime)); height: 6px; border-radius: 3px; }
       .elo-up { color: var(--green); }
       body.light-mode .elo-up { color: #007a30; }
       .elo-dn { color: var(--red); }
+
+      /* ── Per-Team ELO-Anpassungs-Slider in der ELO-Rangliste ── */
+      /* Kompakter Shiny-Slider in jeder Tabellenzeile. */
+      .elo-adj-slider {
+        width: 200px;
+        min-width: 180px;
+        margin: 0;
+      }
+      .elo-adj-slider .form-group { margin: 0 !important; padding: 0 !important; }
+      .elo-adj-slider .irs--shiny { margin-top: 0; margin-bottom: 0; min-height: 50px; }
+      .elo-adj-slider .irs { height: 44px; top: 0; }
+      .elo-adj-slider .irs-line { top: 6px; }
+      .elo-adj-slider .irs-bar  { top: 6px; }
+      .elo-adj-slider .irs-handle { top: -2px; }
+      /* Min/Max-Labels in jeder Zeile ausblenden — Spaltentitel reicht. */
+      .elo-adj-slider .irs-min,
+      .elo-adj-slider .irs-max { display: none; }
+      /* Aktuellen Wert UNTER den Regler legen (statt darüber), kleiner & mit Abstand. */
+      .elo-adj-slider .irs-single {
+        top: 26px !important;
+        background: transparent !important;
+        color: var(--text) !important;
+        font-family: monospace;
+        font-size: 10px;
+        font-weight: 600;
+        padding: 0 !important;
+      }
+      .elo-adj-slider .irs-single::before { display: none !important; }
+
+      .elo-adj-reset-wrap {
+        display: flex;
+        justify-content: flex-end;
+        margin: 0 0 12px 0;
+      }
+
+      /* Spalte 'ELO-Änderung': Differenz aus Slider und Start-ELO,
+         rein lesend, grün/rot gefärbt mit Vorzeichen. */
+      .elo-user-delta { font-family: monospace; font-weight: 600; }
 
       /* ── EINSTELLUNGEN-BOX (permanent ausgeklappt) ── */
       .settings-box {
@@ -918,8 +963,13 @@ ui <- fluidPage(
         position: relative;
         z-index: 50;          /* über Podium, damit Dropdown nicht verdeckt wird */
       }
+      /* Header zeigt Titel links, Reset-Button rechts in derselben Zeile. */
       .settings-header {
-        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 16px;
         font-weight: 600;
         font-size: 13px;
         letter-spacing: 1px;
@@ -929,6 +979,7 @@ ui <- fluidPage(
         background: var(--input-bg);
         border-radius: 10px 10px 0 0;
       }
+      .settings-header-title { flex: 1; }
       .settings-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -936,20 +987,16 @@ ui <- fluidPage(
         padding: 16px;
       }
       .settings-grid .control-group { margin: 0; }
-      .settings-footer {
-        padding: 0 16px 16px 16px;
-        display: flex;
-        justify-content: flex-end;
-      }
-      /* Sekundärer Reset-Button: dezent, klar als Rückgängig-Aktion erkennbar */
+      /* Sekundärer Reset-Button: dezent, klar als Rückgängig-Aktion erkennbar.
+         Im Header kompakter, damit die Headerhöhe nicht aufgebläht wird. */
       .btn-reset {
         background: transparent;
-        color: var(--muted);
+        color: #000000;
         border: 1px solid var(--border);
-        padding: 8px 16px;
+        padding: 6px 14px;
         border-radius: 6px;
         font-family: 'Source Sans 3', Arial, sans-serif;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
         letter-spacing: 1px;
         text-transform: uppercase;
@@ -958,8 +1005,8 @@ ui <- fluidPage(
       }
       .btn-reset:hover {
         background: var(--input-bg);
-        color: var(--text);
-        border-color: var(--text);
+        color: #000000;
+        border-color: #000000;
       }
       /* Zentraler Simulieren-Button außerhalb der Einstellungsbox */
       .run-section {
@@ -1009,12 +1056,13 @@ ui <- fluidPage(
         .nav-tabs > li > a { font-size: 11px; padding: 8px 8px; letter-spacing: 0; }
         .group-table td, .group-table th { padding: 5px 6px; font-size: 12px; }
         .ko-table td, .ko-table th { padding: 5px 8px; font-size: 12px; }
-        .elo-bar-wrap { display: none; }
         .tab-content { padding: 12px; }
         .podium { flex-direction: column; gap: 8px; }
         .podium-card.first  { order: 1; }
         .podium-card.second { order: 2; }
         .podium-card.third  { order: 3; }
+        /* Slider in der ELO-Rangliste auf Mobile schmaler */
+        .elo-adj-slider { width: 140px; min-width: 130px; }
       }
     "))
   ),
@@ -1049,7 +1097,11 @@ ui <- fluidPage(
 
       # ── EINSTELLUNGEN (permanent ausgeklappt) ───────────────────
       div(class="settings-box",
-        div(class="settings-header", "⚙️  Einstellungen"),
+        # Header mit Titel links und Zurücksetzen-Button rechts in derselben Zeile.
+        div(class="settings-header",
+            span(class="settings-header-title", "⚙️  Einstellungen"),
+            actionButton("reset_btn", "↺  Zurücksetzen", class="btn-reset")
+        ),
         div(class="settings-grid",
 
             # Zufallsgenerator Startwert (vormals Random Seed)
@@ -1066,17 +1118,14 @@ ui <- fluidPage(
                             ticks=FALSE, width="100%")
             ),
 
-            # Tor-Modell (Poisson / Empirisch)
-            div(class="control-group score-mode-wrap",
-                div(class="control-label", "Poisson oder Empirische?"),
-                div(class="score-mode-toggle", id="score_mode_toggle",
-                    onclick="toggleScoreMode()",
-                    div(class="score-mode-track", id="score_mode_track",
-                        div(class="score-mode-thumb")
-                    ),
-                    span(class="score-mode-label", id="score_mode_label", "Poisson")
-                ),
-                tags$input(type="hidden", id="use_historical", value="0")
+            # Tor-Modell als Radio-Buttons (klassisch, sofort sichtbar welche Option aktiv ist)
+            div(class="control-group score-mode-radio",
+                div(class="control-label", "Tor-Modell"),
+                radioButtons("use_historical", label = NULL,
+                             choices = c("Poisson"    = "0",
+                                         "Empirisch"  = "1"),
+                             selected = "0",
+                             inline = FALSE)
             ),
 
             # Heimvorteil USA / Kanada / Mexiko
@@ -1133,9 +1182,6 @@ ui <- fluidPage(
                             min=-500, max=500, value=0, step=10,
                             ticks=FALSE, width="100%")
             )
-        ),
-        div(class="settings-footer",
-            actionButton("reset_btn", "↺  Zurücksetzen", class="btn-reset")
         )
       ),
 
@@ -1187,29 +1233,6 @@ ui <- fluidPage(
       }
     }
 
-    /* ── Score mode ── */
-    var useHistorical = false;
-    function toggleScoreMode() {
-      useHistorical = !useHistorical;
-      var track = document.getElementById('score_mode_track');
-      var label = document.getElementById('score_mode_label');
-      var badge = document.getElementById('score_mode_badge');
-      var input = document.getElementById('use_historical');
-      if (useHistorical) {
-        track.classList.add('on');
-        label.textContent = 'Historisch';
-        badge.textContent = 'ACTIVE';
-        input.value = '1';
-      } else {
-        track.classList.remove('on');
-        label.textContent = 'Poisson';
-        badge.textContent = 'ACTIVE';
-        input.value = '0';
-      }
-      // notify Shiny
-      Shiny.setInputValue('use_historical', input.value, {priority: 'event'});
-    }
-
     /* ── Spinner ── */
     $(document).on('click', '#run_btn', function() {
       $('#loader').addClass('active');
@@ -1218,12 +1241,11 @@ ui <- fluidPage(
       $('#loader').removeClass('active');
     });
 
-    /* ── Reset-Handler: setzt Seed-Feld und Tor-Modell zurück ── */
-    /* (Slider/Select werden vom Server via update*Input zurückgesetzt) */
+    /* ── Reset-Handler: setzt Seed-Feld zurück ── */
+    /* (Slider/Select/Radio werden vom Server via update*Input zurückgesetzt) */
     $(document).on('shiny:connected', function() {
       Shiny.addCustomMessageHandler('resetUI', function(message) {
         document.getElementById('seed').value = '';
-        if (useHistorical) toggleScoreMode();   // zurück auf Poisson
       });
     });
   "))
@@ -1234,12 +1256,46 @@ ui <- fluidPage(
 server <- function(input, output, session) {
   result <- reactiveVal(NULL)
 
+  # ── Persistenter Speicher für die Per-Team-ELO-Slider ──
+  # Wir cachen die zuletzt vom User eingestellten Slider-Werte (Slider-Wert
+  # = gewünschte Start-ELO im Bereich 1000–2500) in einem reactiveValues-Container.
+  # So überleben die Einstellungen jedes Re-Rendering der ELO-Tabelle, ohne
+  # auf das (beim Re-Render unzuverlässige) input$adj_<id> angewiesen zu sein.
+  adj_state <- reactiveValues(
+    values = setNames(as.list(round(teams_init$elo)),
+                      as.character(teams_init$id))
+  )
+
+  # ── Sync: Slider-Veränderungen → reactiveValues ──
+  # Wird einmal pro Team registriert. Jeder observeEvent feuert nur, wenn der
+  # zugehörige Slider tatsächlich (vom User) verändert wurde.
+  lapply(teams_init$id, function(tid) {
+    input_id <- paste0("adj_", tid)
+    observeEvent(input[[input_id]], {
+      adj_state$values[[as.character(tid)]] <- as.numeric(input[[input_id]])
+    }, ignoreInit = TRUE)
+  })
+
   # Run on startup with defaults (entspricht ursprünglichem Verhalten)
   observe({ result(run_tournament(seed = 111)) })
 
   observeEvent(input$run_btn, {
     seed <- suppressWarnings(as.integer(input$seed))
     if (is.na(seed)) seed <- as.integer(as.numeric(Sys.time())) %% .Machine$integer.max
+
+    # Per-Team-ELO-Adjustments aus dem persistenten Cache einsammeln und in
+    # Differenzen zur Original-Start-ELO umrechnen, weil apply_elo_modifiers
+    # die Werte additiv aufschlägt. Auf [-500, 500] geclamped als Schutz vor
+    # extremen Eingaben.
+    orig_lookup <- setNames(teams_init$elo, as.character(teams_init$id))
+    adj_vec <- sapply(teams_init$id, function(tid) {
+      key   <- as.character(tid)
+      slv   <- adj_state$values[[key]]
+      if (is.null(slv) || is.na(slv)) return(0)
+      diff <- as.numeric(slv) - as.numeric(orig_lookup[[key]])
+      max(-500, min(500, diff))
+    })
+    names(adj_vec) <- as.character(teams_init$id)
 
     # UI-Werte in params-Liste übersetzen.
     # Alle Defaults entsprechen dem Originalverhalten der App.
@@ -1249,6 +1305,7 @@ server <- function(input, output, session) {
       home_advantage   = as.numeric(input$home_advantage   %||% 0),
       team_boost_id    = as.integer(input$team_boost_id    %||% NA),
       team_boost_value = as.numeric(input$team_boost_value %||% 0),
+      team_adjustments = adj_vec,
       goal_scale       = as.numeric(input$goal_scale       %||% 1.0),
       draw_scale       = as.numeric(input$draw_scale       %||% 1.0),
       upset_factor     = as.numeric(input$upset_factor     %||% 1.0)
@@ -1259,8 +1316,10 @@ server <- function(input, output, session) {
 
   # ── Zurücksetzen-Button: alle Einstellungen auf Default ──
   # Default-Werte stammen aus default_params (siehe Datei-Anfang).
-  # JS-Anteil (Seed-Feld leeren, Tor-Modell-Toggle zurücksetzen)
-  # läuft über Custom Message, weil beides nicht über Shiny-Inputs läuft.
+  # JS-Anteil (Seed-Feld leeren) läuft über Custom Message,
+  # weil das Seed-Feld kein klassisches Shiny-Input ist.
+  # Die Per-Team-Slider werden bewusst NICHT mit zurückgesetzt — dafür gibt es
+  # einen eigenen Button in der ELO-Rangliste, weil sie konzeptuell dorthin gehören.
   observeEvent(input$reset_btn, {
     updateSliderInput(session, "k_slider",         value = default_params$k)
     updateSliderInput(session, "home_advantage",   value = default_params$home_advantage)
@@ -1268,11 +1327,25 @@ server <- function(input, output, session) {
     updateSliderInput(session, "goal_scale",       value = default_params$goal_scale)
     updateSliderInput(session, "draw_scale",       value = default_params$draw_scale)
     updateSliderInput(session, "team_boost_value", value = default_params$team_boost_value)
+    updateRadioButtons(session, "use_historical",  selected = "0")
     updateSelectInput(session, "team_boost_id",
                       selected = (teams_init %>%
                                     filter(fifa_code == "GER") %>%
                                     pull(id))[1])
     session$sendCustomMessage("resetUI", list())
+  })
+
+  # ── Per-Team-ELO-Slider: Reset-Button im ELO-Tab ──
+  # Setzt alle Slider AUF die jeweilige Original-Start-ELO zurück,
+  # womit alle Anpassungen wieder 0 sind.
+  # Greift wirksam erst beim nächsten "Simulieren"-Klick (wie alle anderen Einstellungen).
+  observeEvent(input$reset_adj_btn, {
+    for (i in seq_len(nrow(teams_init))) {
+      tid  <- teams_init$id[i]
+      orig <- round(teams_init$elo[i])
+      updateSliderInput(session, paste0("adj_", tid), value = orig)
+      adj_state$values[[as.character(tid)]] <- orig
+    }
   })
 
   # ── Podium ──
@@ -1385,39 +1458,72 @@ server <- function(input, output, session) {
   })
 
   # ── ELO-Rangliste ──
+  # Spaltenreihenfolge: # | Team | Start-ELO | ELO-Anpassung (Slider 1000–2500)
+  #                     | ELO-Änderung (Slider − Start-ELO) | End-ELO
+  #
+  # Persistenz: Slider-Werte werden in adj_state$values gehalten und beim
+  # Re-Render der Tabelle als Default-Wert benutzt. Beim allerersten Aufbau
+  # eines Slider-Eintrags ist der Wert = Original-Start-ELO (siehe Initialisierung
+  # von adj_state oben), so dass das angezeigte Delta beim ersten Mal 0 ist.
   output$elo_ui <- renderUI({
     r <- result(); req(r)
-    fe      <- r$final_elo
-    max_elo <- max(fe$final_elo)
+    fe <- r$final_elo
 
-    rows <- lapply(1:nrow(fe), function(i) {
+    rows <- lapply(seq_len(nrow(fe)), function(i) {
       row     <- fe[i,]
-      chg     <- row$change
-      chg_cls <- if (chg > 0) "elo-up" else if (chg < 0) "elo-dn" else ""
-      chg_str <- if (chg > 0) paste0("+", chg) else as.character(chg)
-      bar_pct <- round(100 * row$final_elo / max_elo)
-      medal   <- if (i == 1) "🥇" else if (i == 2) "🥈" else if (i == 3) "🥉" else as.character(i)
+      orig    <- as.numeric(row$orig_elo)        # ORIGINAL Start-ELO (vor Modifiern)
+      medal   <- as.character(i)                 # Nur Platznummer, keine Medaille
+      slider_id <- paste0("adj_", row$id)
+
+      # Aktueller Slider-Wert aus dem persistenten Cache (überlebt Re-Renderings).
+      # isolate(): wir wollen den aktuellen Wert beim Aufbau der Tabelle lesen,
+      # aber KEINE reaktive Abhängigkeit erzeugen — sonst würde jeder
+      # Slider-Schub die ganze Tabelle neu rendern.
+      cur_val <- isolate(adj_state$values[[as.character(row$id)]])
+      if (is.null(cur_val) || is.na(cur_val)) cur_val <- orig
+
+      # Turnier-Δ: Differenz zwischen Endstand und Start-ELO NACH Modifiern.
+      # Diese Spalte zeigt ausschließlich das Ergebnis der Simulation und ändert
+      # sich nicht beim Schieben der Regler — erst wenn Simulieren neu gedrückt wird.
+      tour_delta     <- as.numeric(row$change)
+      tour_delta_cls <- if (tour_delta > 0) "elo-up" else if (tour_delta < 0) "elo-dn" else ""
+      tour_delta_str <- if (tour_delta > 0) paste0("+", round(tour_delta)) else as.character(round(tour_delta))
+
       tags$tr(
         tags$td(medal),
         tags$td(paste(row$flag, row$team_name_de)),
-        tags$td(style="font-family:monospace;font-weight:600;color:var(--gold);", row$final_elo),
-        tags$td(class=chg_cls, style="font-family:monospace;", chg_str),
-        tags$td(style="font-family:monospace;color:var(--muted);", round(row$start_elo)),
-        tags$td(div(class="elo-bar-wrap",
-                    div(class="elo-bar", style=paste0("width:", bar_pct, "%"))))
+        # Start-ELO: in Textfarbe (schwarz im Light Mode, weiß im Dark Mode)
+        tags$td(style="font-family:monospace;color:var(--text);", orig),
+        # ELO-Anpassung: voller Shiny-Slider in der Tabellenzelle
+        tags$td(div(class="elo-adj-slider",
+                    sliderInput(slider_id, label = NULL,
+                                min = 1000, max = 2500,
+                                value = cur_val, step = 10,
+                                ticks = FALSE, width = "100%"))),
+        # Turnier-Δ: rein lesend, Vorzeichen + Farbe
+        tags$td(class=paste("elo-user-delta", tour_delta_cls), tour_delta_str),
+        # End-ELO: nach Simulation
+        tags$td(style="font-family:monospace;font-weight:600;color:var(--gold);", row$final_elo)
       )
     })
 
-    tags$table(class="ko-table",
-               tags$thead(tags$tr(
-                 tags$th("#"), tags$th("Team"), tags$th("End-ELO"),
-                 tags$th("Änderung"), tags$th("Start-ELO"), tags$th("Stärke")
-               )),
-               tags$tbody(rows)
+    tagList(
+      div(class="elo-adj-reset-wrap",
+          actionButton("reset_adj_btn", "↺  ELO-Anpassungen zurücksetzen", class="btn-reset")
+      ),
+      tags$table(class="ko-table",
+                 tags$thead(tags$tr(
+                   tags$th("#"),
+                   tags$th("Team"),
+                   tags$th("Start-ELO"),
+                   tags$th("ELO-Anpassung"),
+                   tags$th("Δ Turnier"),
+                   tags$th("End-ELO")
+                 )),
+                 tags$tbody(rows)
+      )
     )
   })
 }
-
-`%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
 
 shinyApp(ui, server)
