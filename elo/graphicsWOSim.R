@@ -68,8 +68,8 @@ load_data <- function() {
   teams   <- read.csv("data/teams.csv", stringsAsFactors = FALSE)
   elo_raw       <- read.delim("https://www.eloratings.net/World.tsv?_=1776984277329",    sep = "\t", header = FALSE)
   ctry <- read.delim("https://www.eloratings.net/en.teams.tsv?_=1772102421794", sep = "\t", header = FALSE)
-  
-  
+
+
   elo <- elo_raw %>%
     left_join(ctry, by = c("V3" = "V1")) %>%
     select(country = V2.y, elo = V4) %>%
@@ -81,7 +81,7 @@ load_data <- function() {
       country == "Democratic Republic of Congo" ~ "DR Congo",
       TRUE ~ country
     ))
-  
+
   teams_init <- teams %>%
     mutate(team_name = case_when(
       team_name == "Winner FIFA Playoff 1" ~ "DR Congo",
@@ -93,14 +93,14 @@ load_data <- function() {
       TRUE ~ team_name
     )) %>%
     left_join(elo, by = c("team_name" = "country"))
-  
+
   missing <- teams_init %>% filter(is.na(elo)) %>% pull(team_name)
   if (length(missing) > 0) {
     message("⚠️  No ELO for: ", paste(missing, collapse = ", "), " — using median")
     teams_init <- teams_init %>%
       mutate(elo = ifelse(is.na(elo), median(elo, na.rm = TRUE), elo))
   }
-  
+
   hist_sd <- read.csv("data/score_dist.csv", stringsAsFactors = FALSE)
   list(teams_init = teams_init, hist_sd = hist_sd)
 }
@@ -140,26 +140,26 @@ elo_wdl <- function(elo_h, elo_a) {
 # Germany (fav or und), look up the bin, and read goals directly.
 
 analytical_score_dist <- function(elo_ger, elo_opp, hist_sd) {
-  
+
   # p_fav: always >= 0.5; identify whether Germany is the favourite
   p_raw     <- elo_expected(elo_ger, elo_opp)   # P(Germany wins)
   ger_is_fav <- (p_raw >= 0.5)
   p_fav     <- if (ger_is_fav) p_raw else (1 - p_raw)
-  
+
   # ELO-derived W/D/L probabilities (from the favourite's point of view)
   draw_p  <- 1/3 * exp(-((p_fav - 0.5)^2) / (2 * 0.236875^2))
   p_fav_w <- p_fav * (1 - draw_p)   # P(favourite wins)
   p_und_w <- (1 - p_fav) * (1 - draw_p)   # P(underdog wins)
-  
+
   outcome_weights <- list(
     list(csv = "fav_win", weight = p_fav_w),
     list(csv = "draw",    weight = draw_p),
     list(csv = "und_win", weight = p_und_w)
   )
-  
+
   rows <- lapply(outcome_weights, function(oc) {
     if (oc$weight == 0) return(NULL)
-    
+
     bin <- hist_sd %>%
       filter(outcome == oc$csv, p_lo <= p_fav_w, p_fav_w < p_hi)
     if (nrow(bin) == 0)
@@ -167,7 +167,7 @@ analytical_score_dist <- function(elo_ger, elo_opp, hist_sd) {
       filter(outcome == oc$csv,
              p_hi == max(p_hi[outcome == oc$csv]))
     if (nrow(bin) == 0) return(NULL)
-    
+
     # Map fav/und goals → ger/opp goals
     bin %>%
       mutate(
@@ -177,7 +177,7 @@ analytical_score_dist <- function(elo_ger, elo_opp, hist_sd) {
       ) %>%
       select(ger_goals, opp_goals, joint_prob)
   })
-  
+
   bind_rows(rows) %>%
     group_by(ger_goals, opp_goals) %>%
     summarise(prob = sum(joint_prob), .groups = "drop") %>%
@@ -194,23 +194,23 @@ analytical_score_dist <- function(elo_ger, elo_opp, hist_sd) {
 # ══════════════════════════════════════════════════════════════
 plot_germany_matrix <- function(teams_init, hist_sd,
                                 germany_name = "Deutschland", max_g = 5) {
-  
+
   ger   <- teams_init %>% filter(team_name == germany_name)
   ger_e <- ger$elo[1]
   ger_g <- ger$group_letter[1]
-  
+
   opps  <- teams_init %>%
     filter(group_letter == ger_g, team_name != germany_name)
-  
+
   plots <- lapply(seq_len(nrow(opps)), function(i) {
-    
+
     opp   <- opps[i, ]
     opp_e <- opp$elo
     opp_f <- get_flag(opp$fifa_code)
-    
+
     dist <- analytical_score_dist(ger_e, opp_e, hist_sd) %>%
       filter(ger_goals <= max_g, opp_goals <= max_g)
-    
+
     grid <- expand.grid(ger_goals = 0:max_g, opp_goals = 0:max_g) %>%
       left_join(dist, by = c("ger_goals","opp_goals")) %>%
       mutate(
@@ -224,10 +224,10 @@ plot_germany_matrix <- function(teams_init, hist_sd,
                        sprintf("%.1f%%", prob * 100),
                        "<.05%")
       )
-    
+
     # ---- ELO comparison ----
     wdl <- elo_wdl(ger_e, opp_e)
-    
+
     # ---- heatmap ----
     p_heat <- ggplot(grid, aes(x = ger_goals, y = opp_goals)) +
       geom_tile(aes(fill = prob), colour = BORDER, linewidth = 0.9) +
@@ -252,21 +252,21 @@ plot_germany_matrix <- function(teams_init, hist_sd,
         plot.background   = element_blank(),
         legend.position   = "none"
       )
-    
+
     # ---- bar plot (W/D/L) ----
     summary_df <- data.frame(
       WIN  = wdl$win,
       DRAW = wdl$draw,
       LOSS = wdl$loss
     )
-    
+
     summary_df <- tidyr::pivot_longer(
       summary_df,
       cols = everything(),
       names_to = "result",
       values_to = "prob"
     )
-    
+
     summary_df$result <- factor(summary_df$result,
                                 levels = c("WIN", "DRAW", "LOSS"))
     p_bar <- ggplot(summary_df, aes(x = 1, y = prob, fill = result)) +
@@ -293,11 +293,11 @@ plot_germany_matrix <- function(teams_init, hist_sd,
         axis.title        = element_blank(),
         legend.position   = "none"
       )
-    
+
     # ---- combine ----
     p_heat / p_bar + plot_layout(heights = c(4, 1))
   })
-  
+
   wrap_plots(plots, nrow = 1) +
     plot_annotation(
       title = "Deutschland: Wahrscheinlichkeitsmatrix für die Gruppenphase",
@@ -327,47 +327,47 @@ plot_germany_matrix_mc <- function(mc, teams_init,
                                    germany_name = "Deutschland",
                                    max_g = 5,
                                    opps) {
-  
+
   ger_g <- teams_init %>%
     filter(team_name == germany_name) %>%
     pull(group_letter)
-  
+
   # Über alle Gegner iterieren -> Liste von Plots
   plots <- lapply(seq_len(nrow(opps)), function(i) {
-    
+
     opp_nm <- opps$team_name[i]
-    
+
     # ── Häufigkeitstabelle aus den MC-Simulationen ──
     raw <- mc$ger_scores_df %>%
       filter(opponent == opp_nm) %>%
       count(ger_goals, opp_goals, name = "n")
-    
+
     n_total <- sum(raw$n)
-    
+
     dist <- raw %>%
       mutate(prob = n / n_total) %>%
       filter(ger_goals <= max_g, opp_goals <= max_g)
-    
+
     grid <- expand.grid(ger_goals = 0:max_g, opp_goals = 0:max_g) %>%
       left_join(dist, by = c("ger_goals", "opp_goals")) %>%
       mutate(
         prob   = ifelse(is.na(prob), 0, prob),
         result = case_when(
-          ger_goals > opp_goals ~ "WIN",
-          ger_goals < opp_goals ~ "LOSS",
-          TRUE                  ~ "DRAW"
+          ger_goals > opp_goals ~ "Sieg",
+          ger_goals < opp_goals ~ "Niederlage",
+          TRUE                  ~ "Remis"
         ),
         label  = ifelse(prob >= 0.005,
                         sprintf("%.1f%%", prob * 100),
                         "<.05%")
       )
-    
+
     # ── Marginale W/D/L-Wahrscheinlichkeiten ──
     wdl_df <- grid %>%
       group_by(result) %>%
       summarise(prob = sum(prob), .groups = "drop") %>%
-      mutate(result = factor(result, levels = c("WIN", "DRAW", "LOSS")))
-    
+      mutate(result = factor(result, levels = c("Sieg", "Remis", "Niederlage")))
+
     # ── Farbverlauf je Region ──
     grid <- grid %>%
       mutate(
@@ -378,7 +378,7 @@ plot_germany_matrix_mc <- function(mc, teams_init,
         ),
         prob_norm = if (max(prob) > 0) prob / max(prob) else 0
       )
-    
+
     grid$fill_col <- mapply(
       function(reg, p) {
         end_col <- switch(reg,
@@ -389,7 +389,7 @@ plot_germany_matrix_mc <- function(mc, teams_init,
       },
       grid$region, grid$prob_norm
     )
-    
+
     # ── Heatmap ──
     p_heat <- ggplot(grid, aes(x = ger_goals, y = opp_goals)) +
       geom_tile(aes(fill = fill_col), colour = BORDER, linewidth = 0.9) +
@@ -409,19 +409,27 @@ plot_germany_matrix_mc <- function(mc, teams_init,
         plot.background  = element_blank(),
         legend.position  = "none"
       )
-    
+
     # ── W/D/L-Balken ──
     p_bar <- ggplot(wdl_df, aes(x = 1, y = prob, fill = result)) +
-      geom_col(width = 0.6) +
+      geom_col(width = 0.4, linewidth = 0.9, colour = BORDER) +
       geom_text(
         aes(label = paste0(round(prob * 100), "%")),
         position = position_stack(vjust = 0.5),
-        size = 3, colour = "black"
-      ) +
+        colour = TEXT, size = 2.9, fontface = "bold", family = FONT      ) +
+      # geom_text(
+      #   aes(label = result),
+      #   position = position_stack(vjust = 0.5),
+      #   vjust = -1,
+      #   size = 3,
+      #   colour = TEXT,
+      #   fontface = "bold",
+      #   family = FONT) +
       coord_flip() +
       scale_fill_manual(
-        values = c("WIN" = LIME, "DRAW" = FILL_DRAW, "LOSS" = RED_LT),
-        name   = NULL
+        values = c("Sieg" = LIME, "Remis" = FILL_DRAW, "Niederlage" = RED_LT),
+        name   = NULL,
+        breaks = c("Niederlage", "Remis", "Sieg")
       ) +
       theme(
         panel.grid.major  = element_blank(),
@@ -431,12 +439,12 @@ plot_germany_matrix_mc <- function(mc, teams_init,
         axis.text         = element_blank(),
         axis.ticks        = element_blank(),
         axis.title        = element_blank(),
-        legend.position   = "none"
+        legend.position   = "bottom"
       )
-    
+
     # ── Patchwork zusammenbauen UND zurückgeben ──
     (p_heat / p_bar) +
-      plot_layout(heights = c(4, 1)) +
+      plot_layout(heights = c(5, 1)) +
       plot_annotation(
         title    = sprintf("Deutschland gegen %s", opp_nm),
         # subtitle = sprintf(
@@ -451,10 +459,10 @@ plot_germany_matrix_mc <- function(mc, teams_init,
         )
       )
   })
-  
+
   # Liste mit Gegner-Namen benennen
   names(plots) <- opps$team_name
-  
+
   plots
 }
 
@@ -471,7 +479,7 @@ plot_champion_prob <- function(mc, top_n = 10) {
       pct       = Champion * 100,
       team_name = factor(team_name, levels = rev(team_name))
     )
-  
+
   ggplot(df, aes(x = pct, y = team_name)) +
     # Main lime bar
     geom_col(fill = LIME, colour = NA, width = 0.65) +
@@ -503,17 +511,17 @@ plot_germany_stages <- function(mc, germany_name = "Deutschland") {
                   "Semi-Final","Final","Champion")
   stage_lbls <- c("Sechzehntel-\nfinale","Achtel-\nfinale","Viertel-\nfinale",
                   "Halb-\nfinale","Finale","Weltmeister")
-  
+
   ger <- mc$reach_df %>% filter(team_name == germany_name)
   if (nrow(ger) == 0) stop("Deutschland not found in results.")
-  
+
   df <- data.frame(
     stage = factor(stage_keys, levels = stage_keys),
     label = stage_lbls,
     pct   = as.numeric(ger[1, stage_keys]) * 100
   ) %>%
     mutate(lbl = sprintf("%.1f%%", pct))
-  
+
   ggplot(df, aes(x = stage, y = pct)) +
     geom_col(fill = LIME, colour = NA, width = 0.65) +
     geom_text(aes(label = lbl), vjust = -0.45, colour = TEXT,
@@ -542,7 +550,7 @@ plot_germany_stages <- function(mc, germany_name = "Deutschland") {
 plot_group_winners <- function(mc, teams_init) {
   gadv_df <- mc$reach_df %>%
     select(id, adv_prob = `Round of 32`)
-  
+
   df <- mc$gwin_df %>%
     left_join(gadv_df, by = "id") %>%
     filter(adv_prob > 0.01) %>%   # optional filter
@@ -554,7 +562,7 @@ plot_group_winners <- function(mc, teams_init) {
       group_label = factor(group_label,
                            levels = paste("GROUP", sort(unique(group))))
     )
-  
+
   ggplot(df, aes(x = win_prob * 100,
                  y = reorder(team_name, win_prob))) +
     geom_col(aes(x = adv_prob * 100),
