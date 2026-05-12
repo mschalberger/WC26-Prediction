@@ -159,7 +159,7 @@ sample_hist_score <- function(p_fav, sim_outcome) {
 # Wird durch die ganze Aufrufkette gereicht, damit keine Funktion
 # eine lange Argumentliste braucht.
 default_params <- list(
-  k                 = 20,    # ELO-Lerngeschwindigkeit
+  k                 = 60,    # ELO-Lerngeschwindigkeit
   use_historical    = FALSE, # FALSE = Poisson, TRUE = empirische Tor-Verteilung
   home_advantage    = 0,     # ELO-Bonus für USA/CAN/MEX (0 = kein Heimvorteil)
   team_boost_id     = NA,    # team$id der Mannschaft, die den Bonus erhält
@@ -167,7 +167,8 @@ default_params <- list(
   team_adjustments  = NULL,  # named numeric vector (id → ELO-Offset/Differenz) aus der ELO-Rangliste
   goal_scale        = 1.0,   # Multiplikator auf Poisson-λ (1 = original)
   draw_scale        = 1.0,   # Multiplikator auf Sigma der Draw-Glockenkurve
-  upset_factor      = 1.0    # Skalierung von (p_h - 0.5); 0 = alles 50/50
+  upset_factor      = 1.0    # interner Multiplikator: 1 = neutral, <1 = Außenseiter begünstigt, >1 = Favoriten begünstigt
+                             # UI zeigt diesen Wert als (1 - upset_factor); Slider-Bereich -3 bis +3 entspricht intern 4 bis -2
 )
 
 # Wendet die ELO-Modifier (Heimvorteil + Team-Boost + Per-Team-Adjustments)
@@ -1063,6 +1064,13 @@ ui <- fluidPage(
         .podium-card.third  { order: 3; }
         /* Slider in der ELO-Rangliste auf Mobile schmaler */
         .elo-adj-slider { width: 140px; min-width: 130px; }
+        /* ELO-Rangliste auf Mobile: nur Platz, Team, Slider, End-ELO zeigen.
+           Spalten 3 (Start-ELO) und 5 (Δ Turnier) werden ausgeblendet,
+           damit die Tabelle nicht über den Bildschirmrand hinausläuft. */
+        .elo-rangliste-table th:nth-child(3),
+        .elo-rangliste-table td:nth-child(3),
+        .elo-rangliste-table th:nth-child(5),
+        .elo-rangliste-table td:nth-child(5) { display: none; }
       }
     "))
   ),
@@ -1106,15 +1114,15 @@ ui <- fluidPage(
 
             # Zufallsgenerator Startwert (vormals Random Seed)
             div(class="control-group",
-                div(class="control-label", "Zufallsgenerator Startwert"),
+                div(class="control-label", "Startwert Zufallsgenerator"),
                 tags$input(id="seed", type="number", value="", min="1", max="99999",
                            class="form-control", placeholder="zufällig")
             ),
 
             # Turnier Elo Gewicht (vormals K-Factor / Lerngeschwindigkeit)
             div(class="control-group",
-                div(class="control-label", "Turnier Elo Gewicht"),
-                sliderInput("k_slider", label=NULL, min=0, max=60, value=20, step=5,
+                div(class="control-label", "ELO-Faktor Turnier"),
+                sliderInput("k_slider", label=NULL, min=0, max=100, value=60, step=5,
                             ticks=FALSE, width="100%")
             ),
 
@@ -1140,7 +1148,7 @@ ui <- fluidPage(
             div(class="control-group",
                 div(class="control-label", "Außenseiter-Faktor"),
                 sliderInput("upset_factor", label=NULL,
-                            min=0, max=4, value=1, step=0.1,
+                            min=-3, max=3, value=0, step=0.1,
                             ticks=FALSE, width="100%")
             ),
 
@@ -1300,7 +1308,7 @@ server <- function(input, output, session) {
     # UI-Werte in params-Liste übersetzen.
     # Alle Defaults entsprechen dem Originalverhalten der App.
     user_params <- modifyList(default_params, list(
-      k                = as.integer(input$k_slider %||% 20),
+      k                = as.integer(input$k_slider %||% 60),
       use_historical   = isTRUE(input$use_historical == "1"),
       home_advantage   = as.numeric(input$home_advantage   %||% 0),
       team_boost_id    = as.integer(input$team_boost_id    %||% NA),
@@ -1308,7 +1316,7 @@ server <- function(input, output, session) {
       team_adjustments = adj_vec,
       goal_scale       = as.numeric(input$goal_scale       %||% 1.0),
       draw_scale       = as.numeric(input$draw_scale       %||% 1.0),
-      upset_factor     = as.numeric(input$upset_factor     %||% 1.0)
+      upset_factor     = 1 - as.numeric(input$upset_factor %||% 0)
     ))
 
     result(run_tournament(seed = seed, params = user_params))
@@ -1323,7 +1331,7 @@ server <- function(input, output, session) {
   observeEvent(input$reset_btn, {
     updateSliderInput(session, "k_slider",         value = default_params$k)
     updateSliderInput(session, "home_advantage",   value = default_params$home_advantage)
-    updateSliderInput(session, "upset_factor",     value = default_params$upset_factor)
+    updateSliderInput(session, "upset_factor",     value = 0)   # Anzeige 0 = intern neutral (1.0)
     updateSliderInput(session, "goal_scale",       value = default_params$goal_scale)
     updateSliderInput(session, "draw_scale",       value = default_params$draw_scale)
     updateSliderInput(session, "team_boost_value", value = default_params$team_boost_value)
@@ -1511,7 +1519,7 @@ server <- function(input, output, session) {
       div(class="elo-adj-reset-wrap",
           actionButton("reset_adj_btn", "↺  ELO-Anpassungen zurücksetzen", class="btn-reset")
       ),
-      tags$table(class="ko-table",
+      tags$table(class="ko-table elo-rangliste-table",
                  tags$thead(tags$tr(
                    tags$th("#"),
                    tags$th("Team"),
