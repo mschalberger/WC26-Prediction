@@ -608,6 +608,57 @@ plot_group_winners <- function(mc, teams_init) {
     xlim(0, 105)
 }
 
+poisson_score_dist <- function(opp_elo, germany_elo, opp_name) {
+  p_h <- 1 / (1 + 10^((opp_elo - germany_elo) / 400))
+
+  lambda_germany <- predict(model, newdata = data.frame(p_self = p_h))
+  lambda_opp     <- predict(model, newdata = data.frame(p_self = 1 - p_h))
+
+  plot_data <- tibble::tibble(
+    goals = 0:max_goals,
+    Deutschland = dpois(0:max_goals, lambda_germany),
+    temp = dpois(0:max_goals, lambda_opp)
+  )
+
+  names(plot_data)[3] <- opp_name
+
+  plot_data <- plot_data %>%
+    pivot_longer(-goals, names_to = "team", values_to = "probability") %>%
+    mutate(team = factor(team, levels = c("Deutschland", opp_name)))
+
+  ggplot(plot_data, aes(x = factor(goals), y = probability, fill = team)) +
+    geom_col(
+      width = 0.7,
+      colour = BORDER,
+      linewidth = 0.4
+    ) +
+    facet_wrap(~ team, nrow = 1) +
+    scale_fill_manual(values = setNames(
+      c(LIME, RED_LT),
+      c("Deutschland", opp_name)
+    )) +
+    scale_y_continuous(
+      labels = percent_format(accuracy = 1),
+      expand = expansion(mult = c(0, 0.08))
+    ) +
+    labs(
+      title = "Poisson-Verteilung der Toranzahl",
+      subtitle = "Erwartete Tore pro Spiel basierend auf λ",
+      x = "Tore",
+      y = "Wahrscheinlichkeit"
+    ) +
+    theme_wc(9) +
+    theme(
+      legend.position = "none",
+      panel.grid.major.x = element_blank(),
+      strip.text = element_text(
+        colour = TEXT,
+        face = "bold",
+        size = 10
+      )
+    )
+}
+
 # ══════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════
@@ -775,5 +826,18 @@ page2 <- (p2a | p2b) / p2c +
 
 ggsave("wc2026_simulation_results.png", page2,
        width = 18, height = 14, dpi = 180, bg = BG)
+
+debugonce(poisson_score_dist)
+p3 <- poisson_score_dist(
+  opp_elo = dat$teams_init %>% filter(team_name == "Côte d'Ivoire") %>% pull(elo),
+  germany_elo = dat$teams_init %>% filter(team_name == "Germany") %>% pull(elo),
+  opp_name = "Côte d'Ivoire"
+)
+p3
+ggsave("Figures/GERCoteDIvoire_Poisson.png",
+       plot   = p3,
+       width  = 6, height = 4,
+       dpi    = 300,
+       bg     = BG)
 message("Saved: wc2026_simulation_results.png")
 message("✅ All done.")
