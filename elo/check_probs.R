@@ -1,4 +1,5 @@
 library(dplyr)
+library(tidyr)
 library(nnet)
 library(ggplot2)
 
@@ -138,17 +139,66 @@ score_smooth <- score_full %>%
 write.csv(score_smooth, "data/score_dist.csv", row.names=FALSE)
 
 # --- Draw probability ---
+
+#whats the maximum draw probability if there is little to no elo difference
+df %>%
+  filter(p_h >= 0.49 & p_h <= 0.51) %>%
+  #filter(outcome != "draw") %>%
+  summarise(n = n(),
+            mean_draw = mean(outcome == "draw"))
+
 sigma_hat <- sqrt(mean((df$p_h - 0.5)^2))
 draw_p <- 1/3 * exp(-((df$p_h - 0.5)^2) / (2 * sigma_hat^2))
 
-ggplot(df, aes(p_h, draw_p)) +
-  geom_point() +
-  labs(
-    title = "Draw Probability vs Home Win Expectancy",
-    x = "Home Win Expectancy (p_h)",
-    y = "Draw Probability"
+
+theoretical_probs <- data.frame(
+  elo_diff = seq(-600, 600, by = 10)
+) %>%
+  mutate(
+    p_h = 1 / (1 + 10^(-elo_diff / 400)),
+    draw_p = 1/3 * exp(-((p_h - 0.5)^2) / (2 * sigma_hat^2)),
+    home_win_p = p_h * (1 - draw_p),
+    away_win_p = (1 - p_h) * (1 - draw_p)
+  ) %>%
+  select(elo_diff, home_win_p, draw_p, away_win_p) %>%
+  pivot_longer(
+    cols = -elo_diff,
+    names_to = "outcome",
+    values_to = "probability"
+  ) %>%
+  mutate(
+    outcome = factor(
+      outcome,
+      levels = c("home_win_p", "draw_p", "away_win_p"),
+      labels = c("Heimsieg", "Unentschieden", "Auswärtssieg")
+    )
+  )
+
+ggplot(theoretical_probs, aes(x = elo_diff, y = probability, color = outcome)) +
+  geom_line(linewidth = 1.3) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  scale_color_manual(
+    values = c("Heimsieg" = "#CCFF00",
+               "Unentschieden" = "#00A4D1",
+               "Auswärtssieg" =  "#E57050")
   ) +
-  theme_minimal()
+  scale_y_continuous(
+    limits = c(0, 1),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  labs(
+    title = "Theoretische Wahrscheinlichkeiten nach Elo-Differenz",
+    subtitle = "Positive Werte bedeuten stärkeres Heimteam",
+    x = "Elo-Differenz (Heimteam − Auswärtsteam)",
+    y = "Wahrscheinlichkeit",
+    color = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
 
 # --- Lambda estimation ---
 goals_long <- bind_rows(
@@ -170,4 +220,3 @@ ggplot(goals_long, aes(p_self, goals)) +
   theme_minimal()
 
 lambda <- predict(model, newdata = data.frame(p_self = df$p_h))
-
