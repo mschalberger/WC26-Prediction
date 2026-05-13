@@ -269,8 +269,8 @@ simulate_match <- function(elo_home, elo_away,
   if (!used_historical) {
     # ── Poisson score sampling (original / fallback) ───────
     # Torreichtum: Multiplikator auf Lambda (1 = original WM-Niveau)
-    lh <- (1.99419 * ph + 0.24629) * params$goal_scale
-    la <- (1.99419 * pa + 0.24629) * params$goal_scale
+    lh <- (1.99419 * p_h + 0.24629) * params$goal_scale
+    la <- (1.99419 * (1-p_h) + 0.24629) * params$goal_scale
     repeat {
       gh <- rpois(1, lh); ga <- rpois(1, la)
       if (outcome == "home" && gh > ga) break
@@ -309,18 +309,18 @@ rank_group_fifa <- function(standing, raw_matches) {
   standing <- standing %>%
     arrange(desc(pts), desc(gd), desc(gf)) %>%
     mutate(tie_key = paste(pts, gd, gf, sep = "_"))
-  
+
   resolved <- lapply(unique(standing$tie_key), function(tk) {
     sub <- standing %>% filter(tie_key == tk)
     if (nrow(sub) == 1) return(sub)
-    
+
     tied_ids <- sub$id
     h2h <- raw_matches %>%
       filter(home_id %in% tied_ids, away_id %in% tied_ids)
-    
+
     h2h_pts <- h2h_gf <- h2h_ga <-
       setNames(rep(0, length(tied_ids)), as.character(tied_ids))
-    
+
     for (i in seq_len(nrow(h2h))) {
       h  <- as.character(h2h$home_id[i])
       a  <- as.character(h2h$away_id[i])
@@ -334,7 +334,7 @@ rank_group_fifa <- function(standing, raw_matches) {
       else if (gh <  ga_) h2h_pts[a] <- h2h_pts[a] + 3
       else { h2h_pts[h] <- h2h_pts[h] + 1; h2h_pts[a] <- h2h_pts[a] + 1 }
     }
-    
+
     sub %>%
       mutate(h2h_pts = as.numeric(h2h_pts[as.character(id)]),
              h2h_gd  = as.numeric(h2h_gf[as.character(id)] -
@@ -343,7 +343,7 @@ rank_group_fifa <- function(standing, raw_matches) {
       arrange(desc(h2h_pts), desc(h2h_gd), desc(h2h_gf), desc(elo)) %>%
       select(-h2h_pts, -h2h_gd, -h2h_gf)
   })
-  
+
   bind_rows(resolved) %>%
     select(-tie_key) %>%
     mutate(rank = row_number())
@@ -366,13 +366,13 @@ run_group_stage <- function(teams_df, params = default_params) {
                                   away_id    = integer(),
                                   home_goals = integer(),
                                   away_goals = integer())
-    
+
     for (pair in pairs) {
       h <- pair[1]; a <- pair[2]
-      
+
       elo_h <- elo_live[as.character(h)]
       elo_a <- elo_live[as.character(a)]
-      
+
       # Already played? Use the real result instead of simulating.
       fixed <- lookup_result("Group", h, a)
       if (!is.null(fixed)) {
@@ -400,11 +400,11 @@ run_group_stage <- function(teams_df, params = default_params) {
         pts[as.character(h)] <- pts[as.character(h)] + 1
         pts[as.character(a)] <- pts[as.character(a)] + 1
       }
-      
+
       raw_grp_matches <- rbind(raw_grp_matches, data.frame(
         home_id = h, away_id = a,
         home_goals = res$home_goals, away_goals = res$away_goals))
-      
+
       ht <- teams_df %>% filter(id == h)
       at <- teams_df %>% filter(id == a)
       all_matches <- rbind(all_matches, data.frame(
@@ -432,7 +432,7 @@ sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
                          round_name, params = default_params) {
   elo_h <- elo_live[as.character(id_a)]
   elo_a <- elo_live[as.character(id_b)]
-  
+
   # Already played? Use the real result instead of simulating.
   fixed <- lookup_result(round_name, id_a, id_b)
   if (!is.null(fixed)) {
@@ -446,7 +446,7 @@ sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
   } else {
     res <- simulate_match(elo_h, elo_a, params = params)
   }
-  
+
   pens <- ""
   if (res$outcome == "draw") {
     pens <- " (i. E.)"
@@ -459,9 +459,9 @@ sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
   } else {
     winner <- ifelse(res$outcome == "home", id_a, id_b)
   }
-    
-  
-  
+
+
+
   loser <- ifelse(winner == id_a, id_b, id_a)
 
   elo_live[as.character(id_a)] <- res$new_elo_home
@@ -508,7 +508,7 @@ run_tournament <- function(seed = NULL, params = default_params) {
 
   thirds <- std %>% filter(rank == 3) %>%
     arrange(desc(pts), desc(gd), desc(gf), desc(elo)) %>% slice(1:8)
-  
+
   get_t <- function(grp, rnk) std %>% filter(group == grp, rank == rnk) %>% pull(id)
 
   r32_pairs <- list(
