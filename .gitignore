@@ -3,4 +3,4 @@ Intern/*
 .RData
 .Rproj.user/
 .DS_Store
-.RDataTmp
+.RDataTmp*
