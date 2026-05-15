@@ -16,6 +16,8 @@ TOP_N        <- 10
 
 BG        <- "#FFFFFF"
 PANEL_BG  <- "#FFFFFF"
+WHITE     <- "#FFFFFF"
+BLACK     <- "#000000"
 BORDER    <- "#E6E6E6"
 TEXT      <- "#000000"
 MUTED     <- "#808080"
@@ -392,7 +394,7 @@ plot_germany_matrix_mc <- function(mc, teams_init,
 
     # ── Heatmap ──
     p_heat <- ggplot(grid, aes(x = ger_goals, y = opp_goals)) +
-      geom_tile(aes(fill = fill_col), colour = BORDER, linewidth = 0.9) +
+      geom_tile(aes(fill = fill_col), colour = NAVY, linewidth = 0.5) +
       geom_text(aes(label = label),
                 colour = TEXT, size = 2.9, fontface = "bold", family = FONT) +
       scale_fill_identity() +
@@ -412,7 +414,7 @@ plot_germany_matrix_mc <- function(mc, teams_init,
 
     # ── W/D/L-Balken ──
     p_bar <- ggplot(wdl_df, aes(x = 1, y = prob, fill = result)) +
-      geom_col(width = 0.4, linewidth = 0.9, colour = BORDER) +
+      geom_col(width = 0.4, linewidth = 0.5, colour = NAVY) +
       geom_text(
         aes(label = paste0(round(prob * 100), "%")),
         position = position_stack(vjust = 0.5),
