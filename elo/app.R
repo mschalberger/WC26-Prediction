@@ -1109,6 +1109,26 @@ ui <- fluidPage(
       /* Selectize-Dropdown muss über dem Podium liegen */
       .selectize-dropdown { z-index: 9999 !important; }
       .selectize-control  { position: relative; z-index: 100; }
+      /* Selectize-Felder/Dropdowns an das Theme anpassen.
+         Standard-Selectize ist immer weiß — wir überschreiben mit CSS-Variablen,
+         damit im Dark Mode korrekt schwarz/weiß angezeigt wird. */
+      .selectize-input,
+      .selectize-input input,
+      .selectize-dropdown,
+      .selectize-dropdown-content,
+      .selectize-dropdown .option {
+        background: var(--input-bg) !important;
+        color: var(--text) !important;
+      }
+      .selectize-input,
+      .selectize-dropdown {
+        border: 1px solid var(--border) !important;
+      }
+      .selectize-dropdown .option.active,
+      .selectize-dropdown .option:hover {
+        background: #CCFF00 !important;
+        color: #000000 !important;
+      }
       /* Podium darf keinen eigenen stacking context erzeugen, der das Dropdown abschneidet */
       .podium { position: relative; z-index: 1; }
 
