@@ -1210,7 +1210,7 @@ ui <- fluidPage(
 
             # Team-Boost: Auswahl
             div(class="control-group",
-                div(class="control-label", "ELO-Änderung für …"),
+                div(class="control-label", "ELO Änderung für …"),
                 selectInput("team_boost_id", label=NULL,
                             choices = setNames(
                               teams_init$id,
@@ -1225,7 +1225,7 @@ ui <- fluidPage(
 
             # Team-Boost: ELO-Differenz
             div(class="control-group",
-                div(class="control-label", "… ELO-Änderung"),
+                div(class="control-label", "… ELO  Änderung"),
                 sliderInput("team_boost_value", label=NULL,
                             min=-500, max=500, value=0, step=10,
                             ticks=FALSE, width="100%")
