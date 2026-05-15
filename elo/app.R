@@ -13,6 +13,39 @@ library(DT)
 # beim UI-Aufbau als auch im Server-Code benutzt).
 `%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
 
+# ── SESSION-TRACKING ─────────────────────────────────────────
+# Loggt Start- und Endzeitpunkt jeder Shiny-Session als TSV-Datei.
+# Aus den beiden Events (event = "start" / "end") lassen sich später
+# sowohl die Gesamtzahl der Besuche als auch Concurrency-Kurven
+# (gleichzeitige Nutzer:innen über die Zeit) rekonstruieren.
+# Fehler beim Loggen werden abgefangen, damit die App auch bei
+# fehlender Schreibberechtigung / vollem Volume normal weiterläuft.
+session_log_file <- "../data/logs/sessions.tsv"
+tryCatch({
+  if (!dir.exists(dirname(session_log_file))) {
+    dir.create(dirname(session_log_file), recursive = TRUE, showWarnings = FALSE)
+  }
+  if (!file.exists(session_log_file)) {
+    writeLines("timestamp\tevent\tsession_token", session_log_file)
+  }
+}, error = function(e) {
+  message("Session-Log konnte nicht initialisiert werden: ", conditionMessage(e))
+})
+
+log_session_event <- function(event, token) {
+  tryCatch({
+    line <- paste(
+      format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+      event,
+      token,
+      sep = "\t"
+    )
+    cat(line, "\n", file = session_log_file, append = TRUE, sep = "")
+  }, error = function(e) {
+    message("Session-Log-Fehler: ", conditionMessage(e))
+  })
+}
+
 # ── DATA ─────────────────────────────────────────────────────
 
 matches <- read.csv("../data/matches.csv")
@@ -166,7 +199,7 @@ default_params <- list(
   team_boost_value  = 0,     # ELO-Bonus für das gewählte Team
   team_adjustments  = NULL,  # named numeric vector (id → ELO-Offset/Differenz) aus der ELO-Rangliste
   goal_scale        = 1.0,   # Multiplikator auf Poisson-λ (1 = original)
-  draw_scale        = 1.0,   # Multiplikator auf Sigma der Draw-Glockenkurve
+  draw_max          = 1/3,   # max. Wahrscheinlichkeit eines Unentschieden bei p_h = 0.5 (ELO-Gleichstand)
   upset_factor      = 1.0    # interner Multiplikator: 1 = neutral, <1 = Außenseiter begünstigt, >1 = Favoriten begünstigt
                              # UI zeigt diesen Wert als (1 - upset_factor); Slider-Bereich -3 bis +3 entspricht intern 4 bis -2
 )
@@ -233,9 +266,13 @@ simulate_match <- function(elo_home, elo_away,
   p_h <- 0.5 + (p_raw - 0.5) * params$upset_factor
   p_h <- min(max(p_h, 0.001), 0.999)
 
-  # ── Unentschieden-Häufigkeit: skaliert Sigma der Glockenkurve ──
-  sigma  <- 0.236875 * params$draw_scale
-  draw_p <- 1/3 * exp(-((p_h - .5)^2) / (2 * sigma^2))
+  # ── Unentschieden-Häufigkeit ──
+  # Glockenkurve um p_h = 0.5 (ELO-Gleichstand). params$draw_max ist die
+  # maximale Wahrscheinlichkeit für ein Unentschieden bei p_h = 0.5; mit
+  # zunehmender Abweichung (eindeutigerer Favorit) fällt die Draw-WK gauss-
+  # förmig gegen 0. Sigma steuert die Breite der Glocke und bleibt fix.
+  sigma  <- 0.236875
+  draw_p <- params$draw_max * exp(-((p_h - 0.5)^2) / (2 * sigma^2))
   ph <- p_h * (1 - draw_p)
   pa <- (1 - p_h) * (1 - draw_p)
 
@@ -1160,11 +1197,14 @@ ui <- fluidPage(
                             ticks=FALSE, width="100%")
             ),
 
-            # Unentschieden-Häufigkeit
+            # Unentschieden-Häufigkeit (max)
+            # Slider-Wert ist direkt die max. Wahrscheinlichkeit eines
+            # Unentschieden bei ELO-Gleichstand. Default 1/3 entspricht dem
+            # bisherigen Verhalten der App.
             div(class="control-group",
-                div(class="control-label", "Unentschieden-Häufigkeit"),
-                sliderInput("draw_scale", label=NULL,
-                            min=0.3, max=5, value=1.0, step=0.1,
+                div(class="control-label", "Unentschieden-Häufigkeit (max)"),
+                sliderInput("draw_max", label=NULL,
+                            min=0, max=1.0, value=1/3, step=0.01,
                             ticks=FALSE, width="100%")
             ),
 
@@ -1262,6 +1302,14 @@ ui <- fluidPage(
 # ── SERVER ───────────────────────────────────────────────────
 
 server <- function(input, output, session) {
+  # ── Session-Tracking ──
+  # Schreibt "start" beim Verbindungsaufbau und "end" beim Schließen
+  # der Session in die TSV-Datei (Setup oben in der Datei).
+  log_session_event("start", session$token)
+  session$onSessionEnded(function() {
+    log_session_event("end", session$token)
+  })
+
   result <- reactiveVal(NULL)
 
   # ── Persistenter Speicher für die Per-Team-ELO-Slider ──
@@ -1315,7 +1363,7 @@ server <- function(input, output, session) {
       team_boost_value = as.numeric(input$team_boost_value %||% 0),
       team_adjustments = adj_vec,
       goal_scale       = as.numeric(input$goal_scale       %||% 1.0),
-      draw_scale       = as.numeric(input$draw_scale       %||% 1.0),
+      draw_max         = as.numeric(input$draw_max         %||% (1/3)),
       upset_factor     = 1 - as.numeric(input$upset_factor %||% 0)
     ))
 
@@ -1333,7 +1381,7 @@ server <- function(input, output, session) {
     updateSliderInput(session, "home_advantage",   value = default_params$home_advantage)
     updateSliderInput(session, "upset_factor",     value = 0)   # Anzeige 0 = intern neutral (1.0)
     updateSliderInput(session, "goal_scale",       value = default_params$goal_scale)
-    updateSliderInput(session, "draw_scale",       value = default_params$draw_scale)
+    updateSliderInput(session, "draw_max",         value = default_params$draw_max)
     updateSliderInput(session, "team_boost_value", value = default_params$team_boost_value)
     updateRadioButtons(session, "use_historical",  selected = "0")
     updateSelectInput(session, "team_boost_id",
