@@ -1202,7 +1202,7 @@ ui <- fluidPage(
             # Unentschieden bei ELO-Gleichstand. Default 1/3 entspricht dem
             # bisherigen Verhalten der App.
             div(class="control-group",
-                div(class="control-label", "Unentschieden-Häufigkeit (max)"),
+                div(class="control-label", "Unentschieden bei gleichem Elo"),
                 sliderInput("draw_max", label=NULL,
                             min=0, max=1.0, value=1/3, step=0.01,
                             ticks=FALSE, width="100%")
@@ -1210,7 +1210,7 @@ ui <- fluidPage(
 
             # Team-Boost: Auswahl
             div(class="control-group",
-                div(class="control-label", "ELO-Bonus für …"),
+                div(class="control-label", "ELO-Änderung für …"),
                 selectInput("team_boost_id", label=NULL,
                             choices = setNames(
                               teams_init$id,
@@ -1225,7 +1225,7 @@ ui <- fluidPage(
 
             # Team-Boost: ELO-Differenz
             div(class="control-group",
-                div(class="control-label", "… ELO-Differenz"),
+                div(class="control-label", "… ELO-Änderung"),
                 sliderInput("team_boost_value", label=NULL,
                             min=-500, max=500, value=0, step=10,
                             ticks=FALSE, width="100%")
