@@ -1017,7 +1017,6 @@ ui <- fluidPage(
         background: var(--input-bg);
         border-radius: 10px 10px 0 0;
       }
-      .settings-header-title { flex: 1; }
       .settings-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -1046,6 +1045,60 @@ ui <- fluidPage(
         color: #000000;
         border-color: #000000;
       }
+      /* Hilfe-Links im Settings-Header (Desktop). Container links für Titel + Links;
+         Reset-Button bleibt rechts. */
+      .settings-header-left {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex: 1;
+        flex-wrap: wrap;
+      }
+      .help-link {
+        font-family: 'Source Sans 3', Arial, sans-serif;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: var(--text);
+        text-decoration: none;
+        padding: 4px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        transition: background 0.15s, border-color 0.15s, color 0.15s;
+      }
+      .help-link:hover {
+        background: var(--input-bg);
+        border-color: #000000;
+        color: #000000;
+        text-decoration: none;
+      }
+      /* Mobile-Hilfeknöpfe über/unter SIMULIEREN. Standardmäßig versteckt,
+         im @media-Block für schmale Bildschirme aktiviert. */
+      .help-link-mobile {
+        display: none;
+        justify-content: center;
+        margin: 0 0 12px 0;
+      }
+      .help-link-mobile.below { margin: 0 0 24px 0; }
+      /* Disclaimer am Fuß der gesamten App. */
+      .disclaimer {
+        margin: 40px 0 24px 0;
+        padding: 20px 0 0 0;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+      .disclaimer-title {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        margin: 0 0 8px 0;
+        color: var(--text);
+      }
+      .disclaimer p { margin: 0 0 8px 0; }
       /* Zentraler Simulieren-Button außerhalb der Einstellungsbox */
       .run-section {
         display: flex;
@@ -1078,6 +1131,20 @@ ui <- fluidPage(
 
       /* ── MOBILE ── */
       @media (max-width: 600px) {
+        /* Header-Hilfe-Links auf Mobile ausblenden, Mobile-Buttons stattdessen anzeigen */
+        .settings-header-left .help-link { display: none; }
+        .help-link-mobile { display: flex; }
+        /* Mobile-Hilfe-Buttons: exakt so groß wie der SIMULIEREN-Button.
+           Volle Breite, identisches Padding/Schriftgröße/letter-spacing.
+           Border bleibt dünn — kennzeichnet die Buttons als sekundär. */
+        .help-link-mobile .help-link {
+          flex: 1;
+          text-align: center;
+          padding: 10px 28px;
+          font-size: 18px;
+          font-weight: 700;
+          letter-spacing: 2px;
+        }
         .wc-header { padding: 12px 16px; }
         .header-inner { flex-direction: column; align-items: flex-start; gap: 10px; }
         .wc-title { font-size: 28px; letter-spacing: 2px; }
@@ -1144,7 +1211,15 @@ ui <- fluidPage(
       div(class="settings-box",
         # Header mit Titel links und Zurücksetzen-Button rechts in derselben Zeile.
         div(class="settings-header",
-            span(class="settings-header-title", "⚙️  Einstellungen"),
+            div(class="settings-header-left",
+                span(class="settings-header-title", "⚙️  Einstellungen"),
+                tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Einstellungen/index.html",
+                       target="_blank", class="help-link",
+                       "ℹ️ Einstellungshilfe"),
+                tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Methodik/index.html",
+                       target="_blank", class="help-link",
+                       "📐 Methodik")
+            ),
             actionButton("reset_btn", "↺  Zurücksetzen", class="btn-reset")
         ),
         div(class="settings-grid",
@@ -1233,11 +1308,22 @@ ui <- fluidPage(
         )
       ),
 
+      # ── Mobile: Einstellungshilfe-Button (nur auf schmalen Bildschirmen sichtbar) ──
+      div(class="help-link-mobile",
+          tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Einstellungen/index.html",
+                 target="_blank", class="help-link",
+                 "ℹ️ Einstellungshilfe")
+      ),
       # ── Simulieren-Button (zentral, außerhalb der Box) ─────────
       div(class="run-section",
           actionButton("run_btn", "▶  SIMULIEREN", class="btn")
       ),
-
+      # ── Mobile: Methodik-Button (nur auf schmalen Bildschirmen sichtbar) ──
+      div(class="help-link-mobile below",
+          tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Methodik/index.html",
+                 target="_blank", class="help-link",
+                 "📐 Methodik")
+      ),
       uiOutput("podium_ui"),
 
       tabsetPanel(id="main_tabs",
@@ -1245,6 +1331,13 @@ ui <- fluidPage(
                   tabPanel("⚽ Gruppenspiele",   div(style="margin-top:16px;", uiOutput("group_matches_ui"))),
                   tabPanel("⚔️ K.O.-Runde",      div(style="margin-top:16px;", uiOutput("ko_ui"))),
                   tabPanel("📊 ELO-Rangliste",    div(style="margin-top:16px;", uiOutput("elo_ui")))
+      ),
+      
+      # ── Haftungsausschluss am Fuß der App ───────────────────────
+      div(class="disclaimer",
+          div(class="disclaimer-title", "Hinweis"),
+          tags$p("Die hier gezeigte Simulation dient ausschließlich Bildungs- und Unterhaltungszwecken im Rahmen der Lehre am Fachbereich Wirtschaftswissenschaft der Freien Universität Berlin. Sie basiert auf einem statistischen Modell (ELO-Bewertungen, Monte-Carlo-Verfahren) und stellt weder eine sportliche Prognose noch eine Empfehlung dar – insbesondere nicht im Hinblick auf Sportwetten oder andere Formen des Glücksspiels."),
+          tags$p("Die Freie Universität Berlin und der Fachbereich Wirtschaftswissenschaft übernehmen keine Haftung für Entscheidungen, die auf Grundlage dieser Simulation getroffen werden, oder für daraus resultierende Schäden gleich welcher Art. Die Nutzung erfolgt auf eigene Verantwortung.")
       )
   ),
 
