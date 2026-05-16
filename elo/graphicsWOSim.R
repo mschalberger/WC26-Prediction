@@ -6,7 +6,7 @@ library(scales)
 
 # ── CONFIG ───────────────────────────────────────────────────
 
-N_SIMS       <- 20000
+N_SIMS       <- 50000
 SEED         <- 42
 K            <- 60
 USE_HIST     <- TRUE
@@ -806,33 +806,10 @@ ggsave("Figures/Gruppensieger.png",
        width  = 6, height = 12,
        dpi    = 300,
        bg     = "white")
-page2 <- (p2a | p2b) / p2c +
-  plot_layout(heights = c(1, 1.5)) +
-  plot_annotation(
-    title    = "FIFA World Cup 2026 — Monte Carlo Simulation Results",
-    subtitle = sprintf(
-      "%s simulations  ·  ELO model  ·  Historical score distribution  ·  K = %d",
-      format(mc$n_sims, big.mark=","), K),
-    caption  = "ELO source: eloratings.net  ·  Score model: historical World Cup & major tournament data",
-    theme = theme(
-      plot.background = element_rect(fill = BG, colour = NA),
-      plot.title      = element_text(colour = TEXT,  size = 17, face = "bold",
-                                     family = FONT, margin = margin(b = 4)),
-      plot.subtitle   = element_text(colour = MUTED, size = 10, family = FONT,
-                                     margin = margin(b = 6)),
-      plot.caption    = element_text(colour = MUTED, size = 8,  family = FONT,
-                                     hjust = 0, margin = margin(t = 8)),
-      plot.margin     = margin(20, 20, 14, 20)
-    )
-  )
 
-ggsave("wc2026_simulation_results.png", page2,
-       width = 18, height = 14, dpi = 180, bg = BG)
-
-debugonce(poisson_score_dist)
 p3 <- poisson_score_dist(
   opp_elo = dat$teams_init %>% filter(team_name == "Côte d'Ivoire") %>% pull(elo),
-  germany_elo = dat$teams_init %>% filter(team_name == "Germany") %>% pull(elo),
+  germany_elo = dat$teams_init %>% filter(team_name == "Deutschland") %>% pull(elo),
   opp_name = "Côte d'Ivoire"
 )
 p3
