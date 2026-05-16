@@ -226,6 +226,10 @@ List simulate_tournament_cpp(
     standings[g] = simulate_group(id_vec, prob_map, rng);
   }
 
+  std::vector<int> group_winners(n_groups);
+  for (int g = 0; g < n_groups; ++g)
+    group_winners[g] = standings[g][0].id;
+
   // Collect elimination lists
   std::vector<int> group_out;   // 4th place + non-advancing 3rds
   std::vector<int> r32_losers, r16_losers, qf_losers, sf_losers;
@@ -335,7 +339,9 @@ List simulate_tournament_cpp(
     Named("qf_losers")  = wrap(qf_losers),
     Named("sf_losers")  = wrap(sf_losers_vec),
     Named("finalist")   = finalist,
-    Named("champion")   = champion
+    Named("champion")   = champion,
+    Named("group_winners") = wrap(group_winners),
+    Named("group_labels")  = wrap(grp_labels)
   );
 }
 
@@ -346,26 +352,36 @@ List simulate_tournament_cpp(
 
 // [[Rcpp::export]]
 List run_mc_cpp(
-    List   groups_list,   // named list: group letter → int vector
-    List   prob_list,     // named list: "h_a" → NumericMatrix
+    List   groups_list,
+    List   prob_list,
     int    n_sims,
     int    seed_base = 42)
 {
   std::mt19937 seed_rng(seed_base);
   std::uniform_int_distribution<int> seed_dist(0, 1e8);
 
-  // Collect all team IDs
   std::vector<int> all_ids;
   CharacterVector grp_names = groups_list.names();
-  for (int g = 0; g < groups_list.size(); ++g) {
-    IntegerVector ids = as<IntegerVector>(groups_list[g]);
-    for (int id : ids) all_ids.push_back(id);
-  }
-  int n_teams = all_ids.size();
+  int n_groups = groups_list.size();
 
-  // Stage index: 0=Group, 1=R32, 2=R16, 3=QF, 4=SF, 5=Final, 6=Champion
+  // Collect team IDs and build group membership map
+  std::unordered_map<int, std::string> team_group;
+  for (int g = 0; g < n_groups; ++g) {
+    IntegerVector ids = as<IntegerVector>(groups_list[g]);
+    std::string glabel = as<std::string>(grp_names[g]);
+    for (int id : ids) {
+      all_ids.push_back(id);
+      team_group[id] = glabel;
+    }
+  }
+
   std::unordered_map<int, std::array<int,7>> elim;
   for (int id : all_ids) elim[id] = {0,0,0,0,0,0,0};
+
+  // ── NEW: group-winner counter ─────────────────────────────────
+  std::unordered_map<int, int> gwin;
+  for (int id : all_ids) gwin[id] = 0;
+  // ─────────────────────────────────────────────────────────────
 
   for (int sim = 0; sim < n_sims; ++sim) {
     int s = seed_dist(seed_rng);
@@ -386,23 +402,28 @@ List run_mc_cpp(
     for (int id : sf)  if (elim.count(id)) elim[id][4]++;
     if (fin  > 0 && elim.count(fin))  elim[fin][5]++;
     if (chmp > 0 && elim.count(chmp)) elim[chmp][6]++;
+
+    // ── NEW: record group winners ─────────────────────────────
+    IntegerVector gw = r["group_winners"];
+    for (int id : gw)
+      if (gwin.count(id)) gwin[id]++;
+      // ─────────────────────────────────────────────────────────
   }
 
-  // Convert to R data structures
   int n = all_ids.size();
   IntegerVector  ids_out(n);
   NumericVector  p_group(n), p_r32(n), p_r16(n), p_qf(n), p_sf(n), p_final(n), p_champ(n);
+  NumericVector  p_gwin(n);
 
   for (int i = 0; i < n; ++i) {
     int id = all_ids[i];
     ids_out[i] = id;
-    double ns = (double)n_sims;
-    double pg  = elim[id][0] / ns;
+    double ns   = (double)n_sims;
+    double pg   = elim[id][0] / ns;
     double pr32 = elim[id][1] / ns;
     double pr16 = elim[id][2] / ns;
     double pqf  = elim[id][3] / ns;
     double psf  = elim[id][4] / ns;
-    double pfin = elim[id][5] / ns;
     double pch  = elim[id][6] / ns;
 
     p_group[i] = 1.0;
@@ -412,6 +433,7 @@ List run_mc_cpp(
     p_sf[i]    = p_qf[i]    - pqf;
     p_final[i] = p_sf[i]    - psf;
     p_champ[i] = pch;
+    p_gwin[i]  = gwin[id] / ns;
   }
 
   return List::create(
@@ -423,6 +445,7 @@ List run_mc_cpp(
     Named("Semi.Final")   = p_sf,
     Named("Final")        = p_final,
     Named("Champion")     = p_champ,
+    Named("GroupWinner")  = p_gwin,
     Named("n_sims")       = n_sims
   );
 }

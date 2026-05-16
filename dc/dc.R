@@ -43,7 +43,7 @@ dc <- goalmodel(goals1 = test$home_score, goals2 = test$away_score,
                 x1 = xx1_hfa)
 summary(dc)
 
-sourceCpp("~/Documents/WC26/elo/dc/dc.cpp")
+sourceCpp("dc/dc.cpp")
 
 
 build_prob_map <- function(model_fit, teams_df, maxgoal = 10) {
@@ -64,15 +64,17 @@ build_prob_map <- function(model_fit, teams_df, maxgoal = 10) {
   n_ok  <- 0L
   n_err <- 0L
 
+  HOST_IDS <- c(1L, 5L, 13L)
+
   for (i in seq_len(nrow(pairs))) {
     h_id <- pairs$h[i]
     a_id <- pairs$a[i]
 
-    if (h_id %in% c(1,5,13)) {
-      x1 <- matrix(c(0,1), ncol =2)
-    } else {
-      x1 <- matrix(c(0,0), ncol =2)
-    }
+    host_home <- h_id %in% HOST_IDS
+    host_away <- a_id %in% HOST_IDS
+    x1 <- matrix(c(0, as.integer(host_home)), ncol = 2)
+    x2 <- matrix(c(0, as.integer(host_away)), ncol = 2)
+    colnames(x1) <- colnames(x2) <- c("home", "host")
 
     mat <- tryCatch({
       res <- predict_goals(model_fit,
@@ -80,7 +82,8 @@ build_prob_map <- function(model_fit, teams_df, maxgoal = 10) {
                            team2    = a_id,
                            maxgoal  = maxgoal,
                            return_df = FALSE,
-                           x1 = x1)
+                           x1 = x1,
+                           x2 = x2)
       # predict_goals returns a list of matrices (one per match pair)
       if (is.list(res)) res[[1]] else res
     }, error = function(e) {
@@ -162,6 +165,7 @@ run_mc_dc <- function(model_fit, teams_df, n_sims = 10000,
       by = "id"
     ) %>%
     rename(
+      `Group Winner` = GroupWinner,
       `Group Stage`   = Group.Stage,
       `Round of 32`   = Round.of.32,
       `Round of 16`   = Round.of.16,
@@ -197,6 +201,8 @@ results <- run_mc_dc(
 
 results$reach_df %>%
   arrange(desc(Champion)) %>%
-  select(team_name, fifa_code, `Round of 32`, `Round of 16`,
+  select(team_name, fifa_code, group_letter,
+         `Round of 32`, `Group Winner`, `Round of 16`,
          `Quarter-Final`, `Semi-Final`, Final, Champion)
+
 
