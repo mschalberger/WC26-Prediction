@@ -42,6 +42,7 @@ dc <- goalmodel(goals1 = test$home_score, goals2 = test$away_score,
                 dc = T,
                 x1 = xx1_hfa)
 summary(dc)
+saveRDS(dc, "dc/dc_model.rds")
 
 sourceCpp("dc/dc.cpp")
 
@@ -204,5 +205,7 @@ results$reach_df %>%
   select(team_name, fifa_code, group_letter,
          `Round of 32`, `Group Winner`, `Round of 16`,
          `Quarter-Final`, `Semi-Final`, Final, Champion)
+
+write.csv(results$reach_df, "dc/dc_reach_df.csv", row.names = FALSE)
 
 
