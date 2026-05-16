@@ -192,7 +192,7 @@ void sim_match(double& elo_h, double& elo_a, double k,
     ga = hf ? ug : fg;
   }
   if (gh < 0) {
-    double lh = 1.99419*ph + 0.24629, la = 1.99419*pa + 0.24629;
+    double lh = 1.99419*(p_h) + 0.24629, la = 1.99419*(1-p_h) + 0.24629;
     int att = 0;
     do {
       gh = R::rpois(lh); ga = R::rpois(la); ++att;
