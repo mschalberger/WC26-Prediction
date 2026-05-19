@@ -45,6 +45,7 @@ dc <- goalmodel(goals1 = test$home_score, goals2 = test$away_score,
                 x1 = xx1_hfa)
 summary(dc)
 saveRDS(dc, "dc/dc_model.rds")
+#dc <- readRDS("dc/dc_model.rds")
 
 sourceCpp("dc/dc.cpp")
 
@@ -90,7 +91,7 @@ build_prob_map <- function(model_fit, teams_df, maxgoal = 10) {
       # predict_goals returns a list of matrices (one per match pair)
       if (is.list(res)) res[[1]] else res
     }, error = function(e) {
-      message("  ERROR for ", h_nm, " vs ", a_nm, ": ", conditionMessage(e))
+      message("  ERROR for ", h_id, " vs ", a_id, ": ", conditionMessage(e))
       NULL
     })
 
