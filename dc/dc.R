@@ -2,11 +2,13 @@ library(devtools)
 library(Rcpp)
 library(dplyr)
 library(tidyr)
+library(readr)
 pak::pak("jalapic/engsoccerdata")
 pak::pak("opisthokonta/goalmodel")
 library(goalmodel)
 
 teams <- read.csv("data/teams.csv")
+all_international_matches <- read_csv("data/all_international_matches.csv")
 
 test <- all_international_matches %>%
   select(1:20) %>%
@@ -196,7 +198,7 @@ run_tournament_dc <- function(model_fit, teams_df,
 results <- run_mc_dc(
   model_fit = dc,   # your fitted dixoncoles/goalmodel object
   teams_df  = teams,  # must have: id, team_name, group_letter
-  n_sims    = 10000,
+  n_sims    = 50000,
   maxgoal   = 10
 )
 
@@ -206,6 +208,7 @@ results$reach_df %>%
          `Round of 32`, `Group Winner`, `Round of 16`,
          `Quarter-Final`, `Semi-Final`, Final, Champion)
 
-write.csv(results$reach_df, "dc/dc_reach_df.csv", row.names = FALSE)
+saveRDS(results, "dc/dc_results.rds")
+
 
 

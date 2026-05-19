@@ -156,7 +156,7 @@ theoretical_probs <- data.frame(
 ) %>%
   mutate(
     p_h = 1 / (1 + 10^(-elo_diff / 400)),
-    draw_p = 1/3 * exp(-((p_h - 0.5)^2) / (2 * sigma_hat^2)),
+    draw_p = 1 * exp(-((p_h - 0.5)^2) / (2 * .3^2)),
     home_win_p = p_h * (1 - draw_p),
     away_win_p = (1 - p_h) * (1 - draw_p)
   ) %>%

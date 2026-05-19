@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <numeric>
 #include <random>
@@ -12,37 +13,27 @@ using namespace Rcpp;
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Match result struct
 struct MatchResult {
   int home_goals;
   int away_goals;
   int outcome; // 1=home win, 0=draw, -1=away win
 };
 
-// Sample a score from a (maxgoal+1)x(maxgoal+1) probability matrix.
-// mat is stored row-major: mat[i][j] = P(home=i, away=j)
 MatchResult sample_score(const NumericMatrix& mat, std::mt19937& rng) {
-  int n = mat.nrow(); // maxgoal + 1
+  int n = mat.nrow();
   int total = n * n;
-
-  // Build flat CDF
   std::vector<double> flat(total);
   for (int i = 0; i < n; ++i)
     for (int j = 0; j < n; ++j)
       flat[i * n + j] = mat(i, j);
-
   std::discrete_distribution<int> dist(flat.begin(), flat.end());
   int idx = dist(rng);
-
   int hg = idx / n;
   int ag = idx % n;
   int outcome = (hg > ag) ? 1 : (hg < ag) ? -1 : 0;
-
   return {hg, ag, outcome};
 }
 
-// In knockout matches a draw goes to penalties — coin-flip weighted by
-// the home-win probability derived from the score matrix.
 int resolve_draw_ko(int team_h, int team_a, std::mt19937& rng) {
   std::uniform_real_distribution<double> u(0.0, 1.0);
   return (u(rng) < 0.5) ? team_h : team_a;
@@ -55,12 +46,9 @@ int resolve_draw_ko(int team_h, int team_a, std::mt19937& rng) {
 struct TeamStat {
   int id;
   int pts = 0, gf = 0, ga = 0;
-  double tiebreak_rng = 0.0; // random tiebreaker
+  double tiebreak_rng = 0.0;
 };
 
-// Returns group standings sorted by (pts desc, gd desc, gf desc, random)
-// group_ids: team IDs in this group (exactly 4)
-// prob_map:  key = "h_a" string → NumericMatrix
 std::vector<TeamStat> simulate_group(
     const std::vector<int>& group_ids,
     const std::unordered_map<std::string, NumericMatrix>& prob_map,
@@ -73,21 +61,16 @@ std::vector<TeamStat> simulate_group(
     stats[id].tiebreak_rng = u(rng);
   }
 
-  // Round-robin: all pairs
   for (int i = 0; i < (int)group_ids.size(); ++i) {
     for (int j = i + 1; j < (int)group_ids.size(); ++j) {
       int h = group_ids[i], a = group_ids[j];
       std::string key = std::to_string(h) + "_" + std::to_string(a);
       auto it = prob_map.find(key);
       if (it == prob_map.end()) {
-        // Reversed lookup
         key = std::to_string(a) + "_" + std::to_string(h);
         it  = prob_map.find(key);
-        if (it == prob_map.end()) continue; // missing — skip
-
-        // Swap: matrix was built for (a, h), transpose roles
+        if (it == prob_map.end()) continue;
         MatchResult res = sample_score(it->second, rng);
-        // away goals become home, home become away
         int tmp = res.home_goals; res.home_goals = res.away_goals; res.away_goals = tmp;
         res.outcome = -res.outcome;
         stats[h].gf += res.home_goals; stats[h].ga += res.away_goals;
@@ -125,7 +108,6 @@ std::vector<TeamStat> simulate_group(
 // Knockout round
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Returns {winner_id, loser_id}
 std::pair<int,int> simulate_ko_match(
     int team_h, int team_a,
     const std::unordered_map<std::string, NumericMatrix>& prob_map,
@@ -142,11 +124,9 @@ std::pair<int,int> simulate_ko_match(
     it  = prob_map.find(key);
     if (it != prob_map.end()) {
       res = sample_score(it->second, rng);
-      // swap perspective
       int tmp = res.home_goals; res.home_goals = res.away_goals; res.away_goals = tmp;
       res.outcome = -res.outcome;
     } else {
-      // Fallback: 50/50 coin flip
       res = {0, 0, 0};
     }
   }
@@ -154,7 +134,7 @@ std::pair<int,int> simulate_ko_match(
   int winner, loser;
   if (res.outcome == 1)       { winner = team_h; loser = team_a; }
   else if (res.outcome == -1) { winner = team_a; loser = team_h; }
-  else { // draw → penalty shootout
+  else {
     winner = resolve_draw_ko(team_h, team_a, rng);
     loser  = (winner == team_h) ? team_a : team_h;
   }
@@ -162,14 +142,14 @@ std::pair<int,int> simulate_ko_match(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Third-place ranking (FIFA 2026 rules: best 8 of 12 groups)
+// Third-place selection (best 8 of 12) — also returns group letters in rank order
 // ─────────────────────────────────────────────────────────────────────────────
 
-std::vector<int> select_best_thirds(
+std::vector<TeamStat> select_best_thirds(
     const std::vector<TeamStat>& thirds,
-    const std::vector<int>& group_order) // group index 0..11
+    const std::vector<std::string>& grp_labels,
+    std::vector<std::string>& out_sorted_groups)
 {
-  // thirds[i] corresponds to group_order[i]
   std::vector<int> idx(thirds.size());
   std::iota(idx.begin(), idx.end(), 0);
   std::sort(idx.begin(), idx.end(), [&](int a, int b) {
@@ -178,26 +158,136 @@ std::vector<int> select_best_thirds(
     int gda = ta.gf - ta.ga, gdb = tb.gf - tb.ga;
     if (gda != gdb) return gda > gdb;
     if (ta.gf != tb.gf) return ta.gf > tb.gf;
-    return false;
+    return ta.tiebreak_rng > tb.tiebreak_rng;
   });
-  std::vector<int> best8_ids;
-  for (int k = 0; k < 8 && k < (int)idx.size(); ++k)
-    best8_ids.push_back(thirds[idx[k]].id);
-  return best8_ids;
+
+  std::vector<TeamStat> best8;
+  out_sorted_groups.clear();
+  for (int k = 0; k < 8 && k < (int)idx.size(); ++k) {
+    best8.push_back(thirds[idx[k]]);
+    out_sorted_groups.push_back(grp_labels[idx[k]]);
+  }
+  return best8;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIFA 2026 Annex C — all 495 combinations
+// Key   = 8 sorted group letters (e.g. "ABCDEFGH")
+// Value = 8-char assignment string for winners 1A,1B,1D,1E,1G,1I,1K,1L
+// ─────────────────────────────────────────────────────────────────────────────
+
+static std::unordered_map<std::string, std::string> build_annexC() {
+  return {
+  {"ABCDEFGH","HGBCAFDE"}, {"ABCDEFGI","CGBDAFEI"}, {"ABCDEFGJ","CGBDAFEJ"}, {"ABCDEFGK","CGBDAFEK"}, {"ABCDEFGL","CGBDAFLE"},
+  {"ABCDEFHI","HEBCAFDI"}, {"ABCDEFHJ","HJBCAFDE"}, {"ABCDEFHK","HEBCAFDK"}, {"ABCDEFHL","HFBCADLE"}, {"ABCDEFIJ","CJBDAFEI"},
+  {"ABCDEFIK","CEBDAFIK"}, {"ABCDEFIL","CEBDAFLI"}, {"ABCDEFJK","CJBDAFEK"}, {"ABCDEFJL","CJBDAFLE"}, {"ABCDEFKL","CEBDAFLK"},
+  {"ABCDEGHI","HGBCADEI"}, {"ABCDEGHJ","HGBCADEJ"}, {"ABCDEGHK","HGBCADEK"}, {"ABCDEGHL","HGBCADLE"}, {"ABCDEGIJ","EGBCADIJ"},
+  {"ABCDEGIK","EGBCADIK"}, {"ABCDEGIL","EGBCADLI"}, {"ABCDEGJK","EGBCADJK"}, {"ABCDEGJL","EGBCADLJ"}, {"ABCDEGKL","EGBCADLK"},
+  {"ABCDEHIJ","HJBCADEI"}, {"ABCDEHIK","HEBCADIK"}, {"ABCDEHIL","HEBCADLI"}, {"ABCDEHJK","HJBCADEK"}, {"ABCDEHJL","HJBCADLE"},
+  {"ABCDEHKL","HEBCADLK"}, {"ABCDEIJK","EJBCADIK"}, {"ABCDEIJL","EJBCADLI"}, {"ABCDEIKL","EIBCADLK"}, {"ABCDEJKL","EJBCADLK"},
+  {"ABCDFGHI","HGBCAFDI"}, {"ABCDFGHJ","HGBCAFDJ"}, {"ABCDFGHK","HGBCAFDK"}, {"ABCDFGHL","CGBDAFLH"}, {"ABCDFGIJ","CGBDAFIJ"},
+  {"ABCDFGIK","CGBDAFIK"}, {"ABCDFGIL","CGBDAFLI"}, {"ABCDFGJK","CGBDAFJK"}, {"ABCDFGJL","CGBDAFLJ"}, {"ABCDFGKL","CGBDAFLK"},
+  {"ABCDFHIJ","HJBCAFDI"}, {"ABCDFHIK","HFBCADIK"}, {"ABCDFHIL","HFBCADLI"}, {"ABCDFHJK","HJBCAFDK"}, {"ABCDFHJL","CJBDAFLH"},
+  {"ABCDFHKL","HFBCADLK"}, {"ABCDFIJK","CJBDAFIK"}, {"ABCDFIJL","CJBDAFLI"}, {"ABCDFIKL","CIBDAFLK"}, {"ABCDFJKL","CJBDAFLK"},
+  {"ABCDGHIJ","HGBCADIJ"}, {"ABCDGHIK","HGBCADIK"}, {"ABCDGHIL","HGBCADLI"}, {"ABCDGHJK","HGBCADJK"}, {"ABCDGHJL","HGBCADLJ"},
+  {"ABCDGHKL","HGBCADLK"}, {"ABCDGIJK","CJBDAGIK"}, {"ABCDGIJL","CJBDAGLI"}, {"ABCDGIKL","IGBCADLK"}, {"ABCDGJKL","CJBDAGLK"},
+  {"ABCDHIJK","HJBCADIK"}, {"ABCDHIJL","HJBCADLI"}, {"ABCDHIKL","HIBCADLK"}, {"ABCDHJKL","HJBCADLK"}, {"ABCDIJKL","IJBCADLK"},
+  {"ABCEFGHI","HGBCAFEI"}, {"ABCEFGHJ","HGBCAFEJ"}, {"ABCEFGHK","HGBCAFEK"}, {"ABCEFGHL","HGBCAFLE"}, {"ABCEFGIJ","EGBCAFIJ"},
+  {"ABCEFGIK","EGBCAFIK"}, {"ABCEFGIL","EGBCAFLI"}, {"ABCEFGJK","EGBCAFJK"}, {"ABCEFGJL","EGBCAFLJ"}, {"ABCEFGKL","EGBCAFLK"},
+  {"ABCEFHIJ","HJBCAFEI"}, {"ABCEFHIK","HEBCAFIK"}, {"ABCEFHIL","HEBCAFLI"}, {"ABCEFHJK","HJBCAFEK"}, {"ABCEFHJL","HJBCAFLE"},
+  {"ABCEFHKL","HEBCAFLK"}, {"ABCEFIJK","EJBCAFIK"}, {"ABCEFIJL","EJBCAFLI"}, {"ABCEFIKL","EIBCAFLK"}, {"ABCEFJKL","EJBCAFLK"},
+  {"ABCEGHIJ","HJBCAGEI"}, {"ABCEGHIK","EGBCAHIK"}, {"ABCEGHIL","EGBCAHLI"}, {"ABCEGHJK","HJBCAGEK"}, {"ABCEGHJL","HJBCAGLE"},
+  {"ABCEGHKL","EGBCAHLK"}, {"ABCEGIJK","EJBCAGIK"}, {"ABCEGIJL","EJBCAGLI"}, {"ABCEGIKL","EGBAICLK"}, {"ABCEGJKL","EJBCAGLK"},
+  {"ABCEHIJK","EJBCAHIK"}, {"ABCEHIJL","EJBCAHLI"}, {"ABCEHIKL","EIBCAHLK"}, {"ABCEHJKL","EJBCAHLK"}, {"ABCEIJKL","EJBAICLK"},
+  {"ABCFGHIJ","HGBCAFIJ"}, {"ABCFGHIK","HGBCAFIK"}, {"ABCFGHIL","HGBCAFLI"}, {"ABCFGHJK","HGBCAFJK"}, {"ABCFGHJL","HGBCAFLJ"},
+  {"ABCFGHKL","HGBCAFLK"}, {"ABCFGIJK","CJBFAGIK"}, {"ABCFGIJL","CJBFAGLI"}, {"ABCFGIKL","IGBCAFLK"}, {"ABCFGJKL","CJBFAGLK"},
+  {"ABCFHIJK","HJBCAFIK"}, {"ABCFHIJL","HJBCAFLI"}, {"ABCFHIKL","HIBCAFLK"}, {"ABCFHJKL","HJBCAFLK"}, {"ABCFIJKL","IJBCAFLK"},
+  {"ABCGHIJK","HJBCAGIK"}, {"ABCGHIJL","HJBCAGLI"}, {"ABCGHIKL","IGBCAHLK"}, {"ABCGHJKL","HJBCAGLK"}, {"ABCGIJKL","IJBCAGLK"},
+  {"ABCHIJKL","IJBCAHLK"}, {"ABDEFGHI","HGBDAFEI"}, {"ABDEFGHJ","HGBDAFEJ"}, {"ABDEFGHK","HGBDAFEK"}, {"ABDEFGHL","HGBDAFLE"},
+  {"ABDEFGIJ","EGBDAFIJ"}, {"ABDEFGIK","EGBDAFIK"}, {"ABDEFGIL","EGBDAFLI"}, {"ABDEFGJK","EGBDAFJK"}, {"ABDEFGJL","EGBDAFLJ"},
+  {"ABDEFGKL","EGBDAFLK"}, {"ABDEFHIJ","HJBDAFEI"}, {"ABDEFHIK","HEBDAFIK"}, {"ABDEFHIL","HEBDAFLI"}, {"ABDEFHJK","HJBDAFEK"},
+  {"ABDEFHJL","HJBDAFLE"}, {"ABDEFHKL","HEBDAFLK"}, {"ABDEFIJK","EJBDAFIK"}, {"ABDEFIJL","EJBDAFLI"}, {"ABDEFIKL","EIBDAFLK"},
+  {"ABDEFJKL","EJBDAFLK"}, {"ABDEGHIJ","HJBDAGEI"}, {"ABDEGHIK","EGBDAHIK"}, {"ABDEGHIL","EGBDAHLI"}, {"ABDEGHJK","HJBDAGEK"},
+  {"ABDEGHJL","HJBDAGLE"}, {"ABDEGHKL","EGBDAHLK"}, {"ABDEGIJK","EJBDAGIK"}, {"ABDEGIJL","EJBDAGLI"}, {"ABDEGIKL","EGBAIDLK"},
+  {"ABDEGJKL","EJBDAGLK"}, {"ABDEHIJK","EJBDAHIK"}, {"ABDEHIJL","EJBDAHLI"}, {"ABDEHIKL","EIBDAHLK"}, {"ABDEHJKL","EJBDAHLK"},
+  {"ABDEIJKL","EJBAIDLK"}, {"ABDFGHIJ","HGBDAFIJ"}, {"ABDFGHIK","HGBDAFIK"}, {"ABDFGHIL","HGBDAFLI"}, {"ABDFGHJK","HGBDAFJK"},
+  {"ABDFGHJL","HGBDAFLJ"}, {"ABDFGHKL","HGBDAFLK"}, {"ABDFGIJK","FJBDAGIK"}, {"ABDFGIJL","FJBDAGLI"}, {"ABDFGIKL","IGBDAFLK"},
+  {"ABDFGJKL","FJBDAGLK"}, {"ABDFHIJK","HJBDAFIK"}, {"ABDFHIJL","HJBDAFLI"}, {"ABDFHIKL","HIBDAFLK"}, {"ABDFHJKL","HJBDAFLK"},
+  {"ABDFIJKL","IJBDAFLK"}, {"ABDGHIJK","HJBDAGIK"}, {"ABDGHIJL","HJBDAGLI"}, {"ABDGHIKL","IGBDAHLK"}, {"ABDGHJKL","HJBDAGLK"},
+  {"ABDGIJKL","IJBDAGLK"}, {"ABDHIJKL","IJBDAHLK"}, {"ABEFGHIJ","HJBFAGEI"}, {"ABEFGHIK","EGBFAHIK"}, {"ABEFGHIL","EGBFAHLI"},
+  {"ABEFGHJK","HJBFAGEK"}, {"ABEFGHJL","HJBFAGLE"}, {"ABEFGHKL","EGBFAHLK"}, {"ABEFGIJK","EJBFAGIK"}, {"ABEFGIJL","EJBFAGLI"},
+  {"ABEFGIKL","EGBAIFLK"}, {"ABEFGJKL","EJBFAGLK"}, {"ABEFHIJK","EJBFAHIK"}, {"ABEFHIJL","EJBFAHLI"}, {"ABEFHIKL","EIBFAHLK"},
+  {"ABEFHJKL","EJBFAHLK"}, {"ABEFIJKL","EJBAIFLK"}, {"ABEGHIJK","EJBAHGIK"}, {"ABEGHIJL","EJBAHGLI"}, {"ABEGHIKL","EGBAIHLK"},
+  {"ABEGHJKL","EJBAHGLK"}, {"ABEGIJKL","EJBAIGLK"}, {"ABEHIJKL","EJBAIHLK"}, {"ABFGHIJK","HJBFAGIK"}, {"ABFGHIJL","HJBFAGLI"},
+  {"ABFGHIKL","HGBAIFLK"}, {"ABFGHJKL","HJBFAGLK"}, {"ABFGIJKL","IJBFAGLK"}, {"ABFHIJKL","HJBAIFLK"}, {"ABGHIJKL","HJBAIGLK"},
+  {"ACDEFGHI","HGECAFDI"}, {"ACDEFGHJ","HGJCAFDE"}, {"ACDEFGHK","HGECAFDK"}, {"ACDEFGHL","HGFCADLE"}, {"ACDEFGIJ","CGJDAFEI"},
+  {"ACDEFGIK","CGEDAFIK"}, {"ACDEFGIL","CGEDAFLI"}, {"ACDEFGJK","CGJDAFEK"}, {"ACDEFGJL","CGJDAFLE"}, {"ACDEFGKL","CGEDAFLK"},
+  {"ACDEFHIJ","HJECAFDI"}, {"ACDEFHIK","HEFCADIK"}, {"ACDEFHIL","HEFCADLI"}, {"ACDEFHJK","HJECAFDK"}, {"ACDEFHJL","HJFCADLE"},
+  {"ACDEFHKL","HEFCADLK"}, {"ACDEFIJK","CJEDAFIK"}, {"ACDEFIJL","CJEDAFLI"}, {"ACDEFIKL","CEIDAFLK"}, {"ACDEFJKL","CJEDAFLK"},
+  {"ACDEGHIJ","HGJCADEI"}, {"ACDEGHIK","HGECADIK"}, {"ACDEGHIL","HGECADLI"}, {"ACDEGHJK","HGJCADEK"}, {"ACDEGHJL","HGJCADLE"},
+  {"ACDEGHKL","HGECADLK"}, {"ACDEGIJK","EGJCADIK"}, {"ACDEGIJL","EGJCADLI"}, {"ACDEGIKL","EGICADLK"}, {"ACDEGJKL","EGJCADLK"},
+  {"ACDEHIJK","HJECADIK"}, {"ACDEHIJL","HJECADLI"}, {"ACDEHIKL","HEICADLK"}, {"ACDEHJKL","HJECADLK"}, {"ACDEIJKL","EJICADLK"},
+  {"ACDFGHIJ","HGJCAFDI"}, {"ACDFGHIK","HGFCADIK"}, {"ACDFGHIL","HGFCADLI"}, {"ACDFGHJK","HGJCAFDK"}, {"ACDFGHJL","CGJDAFLH"},
+  {"ACDFGHKL","HGFCADLK"}, {"ACDFGIJK","CGJDAFIK"}, {"ACDFGIJL","CGJDAFLI"}, {"ACDFGIKL","CGIDAFLK"}, {"ACDFGJKL","CGJDAFLK"},
+  {"ACDFHIJK","HJFCADIK"}, {"ACDFHIJL","HJFCADLI"}, {"ACDFHIKL","HFICADLK"}, {"ACDFHJKL","HJFCADLK"}, {"ACDFIJKL","CJIDAFLK"},
+  {"ACDGHIJK","HGJCADIK"}, {"ACDGHIJL","HGJCADLI"}, {"ACDGHIKL","HGICADLK"}, {"ACDGHJKL","HGJCADLK"}, {"ACDGIJKL","IGJCADLK"},
+  {"ACDHIJKL","HJICADLK"}, {"ACEFGHIJ","HGJCAFEI"}, {"ACEFGHIK","HGECAFIK"}, {"ACEFGHIL","HGECAFLI"}, {"ACEFGHJK","HGJCAFEK"},
+  {"ACEFGHJL","HGJCAFLE"}, {"ACEFGHKL","HGECAFLK"}, {"ACEFGIJK","EGJCAFIK"}, {"ACEFGIJL","EGJCAFLI"}, {"ACEFGIKL","EGICAFLK"},
+  {"ACEFGJKL","EGJCAFLK"}, {"ACEFHIJK","HJECAFIK"}, {"ACEFHIJL","HJECAFLI"}, {"ACEFHIKL","HEICAFLK"}, {"ACEFHJKL","HJECAFLK"},
+  {"ACEFIJKL","EJICAFLK"}, {"ACEGHIJK","EGJCAHIK"}, {"ACEGHIJL","EGJCAHLI"}, {"ACEGHIKL","EGICAHLK"}, {"ACEGHJKL","EGJCAHLK"},
+  {"ACEGIJKL","EJICAGLK"}, {"ACEHIJKL","EJICAHLK"}, {"ACFGHIJK","HGJCAFIK"}, {"ACFGHIJL","HGJCAFLI"}, {"ACFGHIKL","HGICAFLK"},
+  {"ACFGHJKL","HGJCAFLK"}, {"ACFGIJKL","IGJCAFLK"}, {"ACFHIJKL","HJICAFLK"}, {"ACGHIJKL","HJICAGLK"}, {"ADEFGHIJ","HGJDAFEI"},
+  {"ADEFGHIK","HGEDAFIK"}, {"ADEFGHIL","HGEDAFLI"}, {"ADEFGHJK","HGJDAFEK"}, {"ADEFGHJL","HGJDAFLE"}, {"ADEFGHKL","HGEDAFLK"},
+  {"ADEFGIJK","EGJDAFIK"}, {"ADEFGIJL","EGJDAFLI"}, {"ADEFGIKL","EGIDAFLK"}, {"ADEFGJKL","EGJDAFLK"}, {"ADEFHIJK","HJEDAFIK"},
+  {"ADEFHIJL","HJEDAFLI"}, {"ADEFHIKL","HEIDAFLK"}, {"ADEFHJKL","HJEDAFLK"}, {"ADEFIJKL","EJIDAFLK"}, {"ADEGHIJK","EGJDAHIK"},
+  {"ADEGHIJL","EGJDAHLI"}, {"ADEGHIKL","EGIDAHLK"}, {"ADEGHJKL","EGJDAHLK"}, {"ADEGIJKL","EJIDAGLK"}, {"ADEHIJKL","EJIDAHLK"},
+  {"ADFGHIJK","HGJDAFIK"}, {"ADFGHIJL","HGJDAFLI"}, {"ADFGHIKL","HGIDAFLK"}, {"ADFGHJKL","HGJDAFLK"}, {"ADFGIJKL","IGJDAFLK"},
+  {"ADFHIJKL","HJIDAFLK"}, {"ADGHIJKL","HJIDAGLK"}, {"AEFGHIJK","EGJFAHIK"}, {"AEFGHIJL","EGJFAHLI"}, {"AEFGHIKL","EGIFAHLK"},
+  {"AEFGHJKL","EGJFAHLK"}, {"AEFGIJKL","EJIFAGLK"}, {"AEFHIJKL","EJIFAHLK"}, {"AEGHIJKL","EJIAHGLK"}, {"AFGHIJKL","HJIFAGLK"},
+  {"BCDEFGHI","CGBDHFEI"}, {"BCDEFGHJ","HGBCJFDE"}, {"BCDEFGHK","CGBDHFEK"}, {"BCDEFGHL","CGBDHFLE"}, {"BCDEFGIJ","CGBDJFEI"},
+  {"BCDEFGIK","CGBDEFIK"}, {"BCDEFGIL","CGBDEFLI"}, {"BCDEFGJK","CGBDJFEK"}, {"BCDEFGJL","CGBDJFLE"}, {"BCDEFGKL","CGBDEFLK"},
+  {"BCDEFHIJ","CJBDHFEI"}, {"BCDEFHIK","CEBDHFIK"}, {"BCDEFHIL","CEBDHFLI"}, {"BCDEFHJK","CJBDHFEK"}, {"BCDEFHJL","CJBDHFLE"},
+  {"BCDEFHKL","CEBDHFLK"}, {"BCDEFIJK","CJBDEFIK"}, {"BCDEFIJL","CJBDEFLI"}, {"BCDEFIKL","CEBDIFLK"}, {"BCDEFJKL","CJBDEFLK"},
+  {"BCDEGHIJ","HGBCJDEI"}, {"BCDEGHIK","EGBCHDIK"}, {"BCDEGHIL","EGBCHDLI"}, {"BCDEGHJK","HGBCJDEK"}, {"BCDEGHJL","HGBCJDLE"},
+  {"BCDEGHKL","EGBCHDLK"}, {"BCDEGIJK","EGBCJDIK"}, {"BCDEGIJL","EGBCJDLI"}, {"BCDEGIKL","EGBCIDLK"}, {"BCDEGJKL","EGBCJDLK"},
+  {"BCDEHIJK","EJBCHDIK"}, {"BCDEHIJL","EJBCHDLI"}, {"BCDEHIKL","EIBCHDLK"}, {"BCDEHJKL","EJBCHDLK"}, {"BCDEIJKL","EJBCIDLK"},
+  {"BCDFGHIJ","HGBCJFDI"}, {"BCDFGHIK","CGBDHFIK"}, {"BCDFGHIL","CGBDHFLI"}, {"BCDFGHJK","HGBCJFDK"}, {"BCDFGHJL","CGBDHFLJ"},
+  {"BCDFGHKL","CGBDHFLK"}, {"BCDFGIJK","CGBDJFIK"}, {"BCDFGIJL","CGBDJFLI"}, {"BCDFGIKL","CGBDIFLK"}, {"BCDFGJKL","CGBDJFLK"},
+  {"BCDFHIJK","CJBDHFIK"}, {"BCDFHIJL","CJBDHFLI"}, {"BCDFHIKL","CIBDHFLK"}, {"BCDFHJKL","CJBDHFLK"}, {"BCDFIJKL","CJBDIFLK"},
+  {"BCDGHIJK","HGBCJDIK"}, {"BCDGHIJL","HGBCJDLI"}, {"BCDGHIKL","HGBCIDLK"}, {"BCDGHJKL","HGBCJDLK"}, {"BCDGIJKL","IGBCJDLK"},
+  {"BCDHIJKL","HJBCIDLK"}, {"BCEFGHIJ","HGBCJFEI"}, {"BCEFGHIK","EGBCHFIK"}, {"BCEFGHIL","EGBCHFLI"}, {"BCEFGHJK","HGBCJFEK"},
+  {"BCEFGHJL","HGBCJFLE"}, {"BCEFGHKL","EGBCHFLK"}, {"BCEFGIJK","EGBCJFIK"}, {"BCEFGIJL","EGBCJFLI"}, {"BCEFGIKL","EGBCIFLK"},
+  {"BCEFGJKL","EGBCJFLK"}, {"BCEFHIJK","EJBCHFIK"}, {"BCEFHIJL","EJBCHFLI"}, {"BCEFHIKL","EIBCHFLK"}, {"BCEFHJKL","EJBCHFLK"},
+  {"BCEFIJKL","EJBCIFLK"}, {"BCEGHIJK","EJBCHGIK"}, {"BCEGHIJL","EJBCHGLI"}, {"BCEGHIKL","EGBCIHLK"}, {"BCEGHJKL","EJBCHGLK"},
+  {"BCEGIJKL","EJBCIGLK"}, {"BCEHIJKL","EJBCIHLK"}, {"BCFGHIJK","HGBCJFIK"}, {"BCFGHIJL","HGBCJFLI"}, {"BCFGHIKL","HGBCIFLK"},
+  {"BCFGHJKL","HGBCJFLK"}, {"BCFGIJKL","IGBCJFLK"}, {"BCFHIJKL","HJBCIFLK"}, {"BCGHIJKL","HJBCIGLK"}, {"BDEFGHIJ","HGBDJFEI"},
+  {"BDEFGHIK","EGBDHFIK"}, {"BDEFGHIL","EGBDHFLI"}, {"BDEFGHJK","HGBDJFEK"}, {"BDEFGHJL","HGBDJFLE"}, {"BDEFGHKL","EGBDHFLK"},
+  {"BDEFGIJK","EGBDJFIK"}, {"BDEFGIJL","EGBDJFLI"}, {"BDEFGIKL","EGBDIFLK"}, {"BDEFGJKL","EGBDJFLK"}, {"BDEFHIJK","EJBDHFIK"},
+  {"BDEFHIJL","EJBDHFLI"}, {"BDEFHIKL","EIBDHFLK"}, {"BDEFHJKL","EJBDHFLK"}, {"BDEFIJKL","EJBDIFLK"}, {"BDEGHIJK","EJBDHGIK"},
+  {"BDEGHIJL","EJBDHGLI"}, {"BDEGHIKL","EGBDIHLK"}, {"BDEGHJKL","EJBDHGLK"}, {"BDEGIJKL","EJBDIGLK"}, {"BDEHIJKL","EJBDIHLK"},
+  {"BDFGHIJK","HGBDJFIK"}, {"BDFGHIJL","HGBDJFLI"}, {"BDFGHIKL","HGBDIFLK"}, {"BDFGHJKL","HGBDJFLK"}, {"BDFGIJKL","IGBDJFLK"},
+  {"BDFHIJKL","HJBDIFLK"}, {"BDGHIJKL","HJBDIGLK"}, {"BEFGHIJK","EJBFHGIK"}, {"BEFGHIJL","EJBFHGLI"}, {"BEFGHIKL","EGBFIHLK"},
+  {"BEFGHJKL","EJBFHGLK"}, {"BEFGIJKL","EJBFIGLK"}, {"BEFHIJKL","EJBFIHLK"}, {"BEGHIJKL","EJIBHGLK"}, {"BFGHIJKL","HJBFIGLK"},
+  {"CDEFGHIJ","CGJDHFEI"}, {"CDEFGHIK","CGEDHFIK"}, {"CDEFGHIL","CGEDHFLI"}, {"CDEFGHJK","CGJDHFEK"}, {"CDEFGHJL","CGJDHFLE"},
+  {"CDEFGHKL","CGEDHFLK"}, {"CDEFGIJK","CGEDJFIK"}, {"CDEFGIJL","CGEDJFLI"}, {"CDEFGIKL","CGEDIFLK"}, {"CDEFGJKL","CGEDJFLK"},
+  {"CDEFHIJK","CJEDHFIK"}, {"CDEFHIJL","CJEDHFLI"}, {"CDEFHIKL","CEIDHFLK"}, {"CDEFHJKL","CJEDHFLK"}, {"CDEFIJKL","CJEDIFLK"},
+  {"CDEGHIJK","EGJCHDIK"}, {"CDEGHIJL","EGJCHDLI"}, {"CDEGHIKL","EGICHDLK"}, {"CDEGHJKL","EGJCHDLK"}, {"CDEGIJKL","EGICJDLK"},
+  {"CDEHIJKL","EJICHDLK"}, {"CDFGHIJK","CGJDHFIK"}, {"CDFGHIJL","CGJDHFLI"}, {"CDFGHIKL","CGIDHFLK"}, {"CDFGHJKL","CGJDHFLK"},
+  {"CDFGIJKL","CGIDJFLK"}, {"CDFHIJKL","CJIDHFLK"}, {"CDGHIJKL","HGICJDLK"}, {"CEFGHIJK","EGJCHFIK"}, {"CEFGHIJL","EGJCHFLI"},
+  {"CEFGHIKL","EGICHFLK"}, {"CEFGHJKL","EGJCHFLK"}, {"CEFGIJKL","EGICJFLK"}, {"CEFHIJKL","EJICHFLK"}, {"CEGHIJKL","EJICHGLK"},
+  {"CFGHIJKL","HGICJFLK"}, {"DEFGHIJK","EGJDHFIK"}, {"DEFGHIJL","EGJDHFLI"}, {"DEFGHIKL","EGIDHFLK"}, {"DEFGHJKL","EGJDHFLK"},
+  {"DEFGIJKL","EGIDJFLK"}, {"DEFHIJKL","EJIDHFLK"}, {"DEGHIJKL","EJIDHGLK"}, {"DFGHIJKL","HGIDJFLK"}, {"EFGHIJKL","EJIFHGLK"}
+};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Single tournament simulation
 // ─────────────────────────────────────────────────────────────────────────────
 
-// groups_list: named list of integer vectors (team IDs per group, A..L)
-// prob_list:   named list of NumericMatrix, names like "7_12"
-// Returns a named list with elimination counts per team per stage
-
 // [[Rcpp::export]]
 List simulate_tournament_cpp(
-    List groups_list,       // named list: group letter → int vector of team IDs
-    List prob_list,         // named list: "h_a" → NumericMatrix
+    List groups_list,
+    List prob_list,
     int  seed = -1)
 {
   std::mt19937 rng(seed < 0 ? std::random_device{}() : (unsigned)seed);
@@ -210,10 +300,8 @@ List simulate_tournament_cpp(
 
   // Simulate all groups
   CharacterVector grp_names = groups_list.names();
-  int n_groups = groups_list.size(); // should be 12
+  int n_groups = groups_list.size();
 
-  // Per-group standings
-  // groups A..L → index 0..11
   std::vector<std::vector<TeamStat>> standings(n_groups);
   std::vector<std::string> grp_labels(n_groups);
   std::unordered_map<std::string, int> grp_idx;
@@ -230,12 +318,12 @@ List simulate_tournament_cpp(
   for (int g = 0; g < n_groups; ++g)
     group_winners[g] = standings[g][0].id;
 
-  // Collect elimination lists
-  std::vector<int> group_out;   // 4th place + non-advancing 3rds
-  std::vector<int> r32_losers, r16_losers, qf_losers, sf_losers;
+  // Elimination lists
+  std::vector<int> group_out;
+  std::vector<int> r32_losers, r16_losers, qf_losers, sf_losers_vec;
   int finalist = -1, champion = -1;
 
-  // 4th place teams are eliminated
+  // 4th place eliminated
   for (int g = 0; g < n_groups; ++g)
     group_out.push_back(standings[g][3].id);
 
@@ -244,42 +332,82 @@ List simulate_tournament_cpp(
   for (int g = 0; g < n_groups; ++g)
     thirds[g] = standings[g][2];
 
-  // Best 8 thirds advance
-  std::vector<int> group_order(n_groups);
-  std::iota(group_order.begin(), group_order.end(), 0);
-  std::vector<int> best8 = select_best_thirds(thirds, group_order);
+  // Select best 8 thirds; capture their group letters in rank order
+  std::vector<std::string> best8_groups;
+  std::vector<TeamStat> best8_stats = select_best_thirds(thirds, grp_labels, best8_groups);
 
   // Non-advancing thirds → group_out
+  std::unordered_set<int> best8_ids_set;
+  for (auto& ts : best8_stats) best8_ids_set.insert(ts.id);
   for (int g = 0; g < n_groups; ++g) {
     int tid = standings[g][2].id;
-    bool advances = std::find(best8.begin(), best8.end(), tid) != best8.end();
-    if (!advances) group_out.push_back(tid);
+    if (!best8_ids_set.count(tid)) group_out.push_back(tid);
   }
 
-  // Helper lambda: get team ID by group + rank (0-indexed rank)
+  // ── Annex C lookup ────────────────────────────────────────────────────────
+  // combo_key = sorted 8 group letters joined, e.g. "ABCDEFGH"
+  std::vector<std::string> sorted_groups = best8_groups;
+  std::sort(sorted_groups.begin(), sorted_groups.end());
+  std::string combo_key;
+  for (auto& s : sorted_groups) combo_key += s;
+
+  static const auto annexC = build_annexC();
+  auto ac_it = annexC.find(combo_key);
+  if (ac_it == annexC.end())
+    Rcpp::stop("Annex-C combination not found: " + combo_key);
+  const std::string& assign_str = ac_it->second; // positions: A,B,D,E,G,I,K,L
+
+  // Position order of winners in assign_str
+  const std::vector<std::string> winner_order = {"A","B","D","E","G","I","K","L"};
+
+  // Map: group letter → third team ID (only for the 8 qualifying thirds)
+  std::unordered_map<std::string, int> group_to_third_id;
+  for (auto& ts : best8_stats) {
+    for (int g = 0; g < n_groups; ++g) {
+      if (standings[g][2].id == ts.id) {
+        group_to_third_id[grp_labels[g]] = ts.id;
+        break;
+      }
+    }
+  }
+
+  // Helper: given a winner's group letter, return the Annex-C-assigned third's team ID
+  auto third_id_for_winner = [&](const std::string& winner_grp) -> int {
+    for (int i = 0; i < 8; ++i) {
+      if (winner_order[i] == winner_grp) {
+        std::string src_group(1, assign_str[i]);
+        auto it = group_to_third_id.find(src_group);
+        if (it != group_to_third_id.end()) return it->second;
+      }
+    }
+    return -1;
+  };
+
+  // Helper: get team ID by group label + 0-indexed rank
   auto gt = [&](const std::string& grp, int rank) -> int {
     int gi = grp_idx.count(grp) ? grp_idx[grp] : -1;
     if (gi < 0 || rank >= (int)standings[gi].size()) return -1;
     return standings[gi][rank].id;
   };
 
+  // ── Round of 32 pairs ─────────────────────────────────────────────────────
   std::vector<std::pair<int,int>> r32_pairs = {
-    {gt("A",1), gt("B",1)},   // 2A vs 2B
-    {gt("C",0), gt("F",1)},   // 1C vs 2F
-    {gt("E",0), best8[0]},    // 1E vs 3rd
-    {gt("F",0), gt("C",1)},   // 1F vs 2C
-    {gt("E",1), gt("I",1)},   // 2E vs 2I
-    {gt("I",0), best8[1]},    // 1I vs 3rd
-    {gt("A",0), best8[2]},    // 1A vs 3rd
-    {gt("L",0), best8[3]},    // 1L vs 3rd
-    {gt("G",0), best8[4]},    // 1G vs 3rd
-    {gt("D",0), best8[5]},    // 1D vs 3rd
-    {gt("H",0), gt("J",1)},   // 1H vs 2J
-    {gt("K",1), gt("L",1)},   // 2K vs 2L
-    {gt("B",0), best8[6]},    // 1B vs 3rd
-    {gt("D",1), gt("G",1)},   // 2D vs 2G
-    {gt("J",0), gt("H",1)},   // 1J vs 2H
-    {gt("K",0), best8[7]}     // 1K vs 3rd
+    {gt("A",1), gt("B",1)},
+    {gt("C",0), gt("F",1)},
+    {gt("E",0), third_id_for_winner("E")},
+    {gt("F",0), gt("C",1)},
+    {gt("E",1), gt("I",1)},
+    {gt("I",0), third_id_for_winner("I")},
+    {gt("A",0), third_id_for_winner("A")},
+    {gt("L",0), third_id_for_winner("L")},
+    {gt("G",0), third_id_for_winner("G")},
+    {gt("D",0), third_id_for_winner("D")},
+    {gt("H",0), gt("J",1)},
+    {gt("K",1), gt("L",1)},
+    {gt("B",0), third_id_for_winner("B")},
+    {gt("D",1), gt("G",1)},
+    {gt("J",0), gt("H",1)},
+    {gt("K",0), third_id_for_winner("K")}
   };
 
   std::vector<int> r32_winners;
@@ -290,7 +418,7 @@ List simulate_tournament_cpp(
     r32_losers.push_back(l);
   }
 
-  // Round of 16 — 8 matches: winners[0]vs[1], [2]vs[3], ...
+  // Round of 16
   std::vector<int> r16_winners;
   for (int i = 0; i < 16; i += 2) {
     if (r32_winners[i] < 0 || r32_winners[i+1] < 0) {
@@ -301,7 +429,7 @@ List simulate_tournament_cpp(
     r16_losers.push_back(l);
   }
 
-  // Quarter-finals — 4 matches
+  // Quarter-finals
   std::vector<int> qf_winners;
   for (int i = 0; i < 8; i += 2) {
     if (r16_winners[i] < 0 || r16_winners[i+1] < 0) {
@@ -312,9 +440,8 @@ List simulate_tournament_cpp(
     qf_losers.push_back(l);
   }
 
-  // Semi-finals — 2 matches
+  // Semi-finals
   std::vector<int> sf_winners;
-  std::vector<int> sf_losers_vec;
   for (int i = 0; i < 4; i += 2) {
     if (qf_winners[i] < 0 || qf_winners[i+1] < 0) {
       sf_winners.push_back(-1); sf_losers_vec.push_back(-1); continue;
@@ -324,7 +451,6 @@ List simulate_tournament_cpp(
     sf_losers_vec.push_back(l);
   }
 
-  // Third-place play-off (ignored for reach probabilities, but recorded)
   // Final
   if (sf_winners.size() >= 2 && sf_winners[0] > 0 && sf_winners[1] > 0) {
     auto [w, l] = simulate_ko_match(sf_winners[0], sf_winners[1], prob_map, rng);
@@ -333,21 +459,20 @@ List simulate_tournament_cpp(
   }
 
   return List::create(
-    Named("group_out")  = wrap(group_out),
-    Named("r32_losers") = wrap(r32_losers),
-    Named("r16_losers") = wrap(r16_losers),
-    Named("qf_losers")  = wrap(qf_losers),
-    Named("sf_losers")  = wrap(sf_losers_vec),
-    Named("finalist")   = finalist,
-    Named("champion")   = champion,
+    Named("group_out")     = wrap(group_out),
+    Named("r32_losers")    = wrap(r32_losers),
+    Named("r16_losers")    = wrap(r16_losers),
+    Named("qf_losers")     = wrap(qf_losers),
+    Named("sf_losers")     = wrap(sf_losers_vec),
+    Named("finalist")      = finalist,
+    Named("champion")      = champion,
     Named("group_winners") = wrap(group_winners),
     Named("group_labels")  = wrap(grp_labels)
   );
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Monte Carlo wrapper — called once from R, runs n_sims internally
+// Monte Carlo wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
 // [[Rcpp::export]]
@@ -364,7 +489,6 @@ List run_mc_cpp(
   CharacterVector grp_names = groups_list.names();
   int n_groups = groups_list.size();
 
-  // Collect team IDs and build group membership map
   std::unordered_map<int, std::string> team_group;
   for (int g = 0; g < n_groups; ++g) {
     IntegerVector ids = as<IntegerVector>(groups_list[g]);
@@ -378,10 +502,8 @@ List run_mc_cpp(
   std::unordered_map<int, std::array<int,7>> elim;
   for (int id : all_ids) elim[id] = {0,0,0,0,0,0,0};
 
-  // ── NEW: group-winner counter ─────────────────────────────────
   std::unordered_map<int, int> gwin;
   for (int id : all_ids) gwin[id] = 0;
-  // ─────────────────────────────────────────────────────────────
 
   for (int sim = 0; sim < n_sims; ++sim) {
     int s = seed_dist(seed_rng);
@@ -403,11 +525,9 @@ List run_mc_cpp(
     if (fin  > 0 && elim.count(fin))  elim[fin][5]++;
     if (chmp > 0 && elim.count(chmp)) elim[chmp][6]++;
 
-    // ── NEW: record group winners ─────────────────────────────
     IntegerVector gw = r["group_winners"];
     for (int id : gw)
       if (gwin.count(id)) gwin[id]++;
-      // ─────────────────────────────────────────────────────────
   }
 
   int n = all_ids.size();
@@ -437,15 +557,16 @@ List run_mc_cpp(
   }
 
   return List::create(
-    Named("id")           = ids_out,
-    Named("Group.Stage")  = p_group,
-    Named("Round.of.32")  = p_r32,
-    Named("Round.of.16")  = p_r16,
-    Named("Quarter.Final")= p_qf,
-    Named("Semi.Final")   = p_sf,
-    Named("Final")        = p_final,
-    Named("Champion")     = p_champ,
-    Named("GroupWinner")  = p_gwin,
-    Named("n_sims")       = n_sims
+    Named("id")            = ids_out,
+    Named("Group.Stage")   = p_group,
+    Named("Round.of.32")   = p_r32,
+    Named("Round.of.16")   = p_r16,
+    Named("Quarter.Final") = p_qf,
+    Named("Semi.Final")    = p_sf,
+    Named("Final")         = p_final,
+    Named("Champion")      = p_champ,
+    Named("GroupWinner")   = p_gwin,
+    Named("n_sims")        = n_sims
   );
 }
+
