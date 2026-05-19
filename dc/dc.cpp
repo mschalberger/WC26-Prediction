@@ -34,9 +34,12 @@ MatchResult sample_score(const NumericMatrix& mat, std::mt19937& rng) {
   return {hg, ag, outcome};
 }
 
-int resolve_draw_ko(int team_h, int team_a, std::mt19937& rng) {
+int resolve_draw_ko(double p_home_wins, double alpha, std::mt19937& rng,
+                    int team_h, int team_a) {
+  // Shrink toward 0.5
+  double p_pen = 0.5 + alpha * (p_home_wins - 0.5);
   std::uniform_real_distribution<double> u(0.0, 1.0);
-  return (u(rng) < 0.5) ? team_h : team_a;
+  return (u(rng) < p_pen) ? team_h : team_a;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,12 +114,15 @@ std::vector<TeamStat> simulate_group(
 std::pair<int,int> simulate_ko_match(
     int team_h, int team_a,
     const std::unordered_map<std::string, NumericMatrix>& prob_map,
-    std::mt19937& rng)
+    std::mt19937& rng,
+    double pen_alpha = 0.5)
 {
   std::string key = std::to_string(team_h) + "_" + std::to_string(team_a);
   auto it = prob_map.find(key);
 
   MatchResult res;
+  bool swapped = false;
+
   if (it != prob_map.end()) {
     res = sample_score(it->second, rng);
   } else {
@@ -135,7 +141,18 @@ std::pair<int,int> simulate_ko_match(
   if (res.outcome == 1)       { winner = team_h; loser = team_a; }
   else if (res.outcome == -1) { winner = team_a; loser = team_h; }
   else {
-    winner = resolve_draw_ko(team_h, team_a, rng);
+    double p_home_wins = 0.5;  // fallback
+    if (it != prob_map.end()) {
+      const NumericMatrix& m = it->second;
+      int n = m.nrow();
+      double p_hw = 0.0;
+      for (int i = 1; i < n; ++i)
+        for (int j = 0; j < i; ++j)
+          p_hw += m(i, j);
+      p_home_wins = swapped ? (1.0 - p_hw) : p_hw;
+    }
+    int ko_winner = resolve_draw_ko(p_home_wins, pen_alpha, rng, team_h, team_a);
+    winner = ko_winner;
     loser  = (winner == team_h) ? team_a : team_h;
   }
   return {winner, loser};
