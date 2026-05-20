@@ -4,6 +4,9 @@ library(tidyr)
 library(patchwork)
 library(scales)
 
+options(scipen = 999)
+
+
 # ── CONFIG ───────────────────────────────────────────────────
 BG        <- "#FFFFFF"
 PANEL_BG  <- "#FFFFFF"
@@ -363,7 +366,7 @@ plot_group_winners_dc <- function(dc_results, teams_init) {
     labs(
       title    = "Gruppensieger",
       subtitle = sprintf(
-        "%s Simulationen  ·  Nur Mannschaften mit > 0.5%% Wahrscheinlichkeit",
+        "%s Simulationen",
         format(dc_results$n_sims, big.mark = ",")),
       x = NULL, y = NULL
     ) +
@@ -479,4 +482,6 @@ ggsave("Figures/Gruppensieger_dc.png",
        width  = 6, height = 12,
        dpi    = 300,
        bg     = "white")
+
+
 
