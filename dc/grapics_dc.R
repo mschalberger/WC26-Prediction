@@ -57,50 +57,58 @@ theme_wc <- function(base_size = 12) {
 
 plot_germany_matrix_dc <- function(dc, teams_init,
                                    germany_name = "Deutschland",
-                                   max_g = 5,
+                                   max_g = 5,           # still predict up to max_g internally
                                    opps) {
-  # Über alle Gegner iterieren -> Liste von Plots
+
+  DISPLAY_MAX <- 4L   # last displayed bin  (0, 1, 2, 3, 4+)
+
   plots <- lapply(seq_len(nrow(opps)), function(i) {
 
     opp_nm <- opps$team_name[i]
 
-    x1 <- x2 <- matrix(c(0, 0), ncol = 2) # Dummy-Designmatrix für beide Teams (keine Home/Away Effekte)
+    x1 <- x2 <- matrix(c(0, 0), ncol = 2)
     colnames(x1) <- colnames(x2) <- c("home", "host")
 
-    grid <- predict_goals(dc,
-                  team1 = teams_init %>% filter(team_name == germany_name) %>% pull(id),
-                  team2 = teams_init %>% filter(team_name == opp_nm) %>% pull(id),
-                  x1 = x1,
-                  x2 = x2,
-                  maxgoal = max_g,
-                  return_df = TRUE) %>%
+    # ── Raw grid (up to max_g goals) ──
+    raw_grid <- predict_goals(dc,
+                              team1 = teams_init %>% filter(team_name == germany_name) %>% pull(id),
+                              team2 = teams_init %>% filter(team_name == opp_nm)       %>% pull(id),
+                              x1 = x1, x2 = x2,
+                              maxgoal = max_g,
+                              return_df = TRUE) %>%
+      mutate(prob = ifelse(is.na(probability), 0, probability))
+
+    # ── Collapse goals >= DISPLAY_MAX into one bin ──
+    grid <- raw_grid %>%
       mutate(
-        prob   = ifelse(is.na(probability), 0, probability),
+        g1 = pmin(goals1, DISPLAY_MAX),
+        g2 = pmin(goals2, DISPLAY_MAX)
+      ) %>%
+      group_by(g1, g2) %>%
+      summarise(prob = sum(prob), .groups = "drop") %>%
+      rename(goals1 = g1, goals2 = g2) %>%
+      mutate(
         result = case_when(
           goals1 > goals2 ~ "Sieg",
           goals1 < goals2 ~ "Niederlage",
-          TRUE                  ~ "Remis"
+          TRUE            ~ "Remis"
         ),
-        label  = ifelse(probability >= 0.005,
-                        sprintf("%.1f%%", probability * 100),
-                        "<.05%")
+        label = ifelse(
+          prob >= 0.005,
+          sprintf("%.1f%%", prob * 100),
+          "<.05%"
+        )
       )
 
-    # ── Marginale W/D/L-Wahrscheinlichkeiten ──
-    wdl_df <- grid %>%
-      group_by(result) %>%
-      summarise(prob = sum(prob), .groups = "drop") %>%
-      mutate(result = factor(result, levels = c("Sieg", "Remis", "Niederlage")))
-
-    # ── Farbverlauf je Region ──
+    # ── Colour gradient per region ──
     grid <- grid %>%
       mutate(
-        region = case_when(
-          goals1 >  goals2 ~ "win",
-          goals1 <  goals2 ~ "loss",
-          TRUE                   ~ "draw"
+        region    = case_when(
+          goals1 > goals2 ~ "win",
+          goals1 < goals2 ~ "loss",
+          TRUE            ~ "draw"
         ),
-        prob_norm = if (max(probability) > 0) prob / max(probability) else 0
+        prob_norm = if (max(prob) > 0) prob / max(prob) else 0
       )
 
     grid$fill_col <- mapply(
@@ -114,14 +122,20 @@ plot_germany_matrix_dc <- function(dc, teams_init,
       grid$region, grid$prob_norm
     )
 
-    # ── Heatmap ──
+    # ── Axis labels: 0-3 numeric, 4 → "4+" ──
+    axis_breaks  <- 0:DISPLAY_MAX
+    axis_labels  <- c(as.character(0:(DISPLAY_MAX - 1)), paste0(DISPLAY_MAX, "+"))
+
+    # ── 5×5 Heatmap ──
     p_heat <- ggplot(grid, aes(x = goals1, y = goals2)) +
       geom_tile(aes(fill = fill_col), colour = NAVY, linewidth = 0.5) +
       geom_text(aes(label = label),
                 colour = TEXT, size = 2.9, fontface = "bold", family = FONT) +
       scale_fill_identity() +
-      scale_x_continuous(breaks = 0:max_g, expand = expansion(add = 0.52)) +
-      scale_y_continuous(breaks = 0:max_g, expand = expansion(add = 0.52)) +
+      scale_x_continuous(breaks = axis_breaks, labels = axis_labels,
+                         expand = expansion(add = 0.52)) +
+      scale_y_continuous(breaks = axis_breaks, labels = axis_labels,
+                         expand = expansion(add = 0.52)) +
       labs(
         x = "Tore Deutschland",
         y = sprintf("Tore %s", opp_nm)
@@ -134,21 +148,72 @@ plot_germany_matrix_dc <- function(dc, teams_init,
         legend.position  = "none"
       )
 
-    # ── W/D/L-Balken ──
+    # ── W/D/L bar (unchanged) ──
+    wdl_df <- predict_result(dc,
+                             team1 = teams_init %>% filter(team_name == germany_name) %>% pull(id),
+                             team2 = teams_init %>% filter(team_name == opp_nm)       %>% pull(id),
+                             x1 = x1, x2 = x2,
+                             return_df = TRUE) %>%
+      pivot_longer(cols = c(p1, pd, p2),
+                   names_to  = "outcome",
+                   values_to = "probability") %>%
+      mutate(
+        prob   = ifelse(is.na(probability), 0, probability),
+        result = case_when(
+          outcome == "p1" ~ "Sieg",
+          outcome == "p2" ~ "Niederlage",
+          outcome == "pd" ~ "Remis",
+          TRUE            ~ NA_character_
+        ),
+        result = factor(result, levels = c("Sieg", "Remis", "Niederlage"))
+      )
+
+    wdl_repel <- wdl_df %>%
+      arrange(desc(result)) %>%
+      mutate(
+        ymax = cumsum(prob),
+        ymin = ymax - prob,
+        ymid = (ymin + ymax) / 2,
+        lbl  = paste0(round(prob * 100), "%")
+      )
+
+    # Split into direct labels (>= 10%) and repelled labels (< 10%)
+    wdl_direct <- wdl_repel %>% filter(prob >= 0.1)
+    wdl_small  <- wdl_repel %>% filter(prob <  0.1)
+
+    # ── Bar ──
     p_bar <- ggplot(wdl_df, aes(x = 1, y = prob, fill = result)) +
       geom_col(width = 0.4, linewidth = 0.5, colour = NAVY) +
+      # Direct labels for large segments — centred in the bar
       geom_text(
-        aes(label = paste0(round(prob * 100), "%")),
-        position = position_stack(vjust = 0.5),
-        colour = TEXT, size = 2.9, fontface = "bold", family = FONT      ) +
-      # geom_text(
-      #   aes(label = result),
-      #   position = position_stack(vjust = 0.5),
-      #   vjust = -1,
-      #   size = 3,
-      #   colour = TEXT,
-      #   fontface = "bold",
-      #   family = FONT) +
+        data = wdl_direct,
+        aes(x = 1, y = ymid, label = lbl),
+        hjust    = 0.5,
+        colour   = TEXT,
+        size     = 2.9,
+        fontface = "bold",
+        family   = FONT
+      ) +
+      ggrepel::geom_text_repel(
+        data = wdl_small,
+        aes(x = 1, y = ymid, label = lbl),
+        direction          = "y",
+        nudge_y            = -0.03,
+        nudge_x            = 0.45,
+        hjust              = 0,
+        force              = 2.0,
+        force_pull         = 0.05,
+        segment.color      = NAVY,
+        segment.size       = 0.3,
+        segment.linetype   = "dotted",
+        min.segment.length = 0,
+        box.padding        = 0.15,
+        colour    = TEXT,
+        size      = 2.9,
+        fontface  = "bold",
+        family    = FONT,
+        xlim      = c(NA, 2.4)
+      ) +
       coord_flip() +
       scale_fill_manual(
         values = c("Sieg" = LIME, "Remis" = FILL_DRAW, "Niederlage" = RED_LT),
@@ -156,24 +221,21 @@ plot_germany_matrix_dc <- function(dc, teams_init,
         breaks = c("Niederlage", "Remis", "Sieg")
       ) +
       theme(
-        panel.grid.major  = element_blank(),
-        panel.grid.minor  = element_blank(),
-        panel.background  = element_blank(),
-        plot.background   = element_blank(),
-        axis.text         = element_blank(),
-        axis.ticks        = element_blank(),
-        axis.title        = element_blank(),
-        legend.position   = "bottom"
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        plot.background  = element_blank(),
+        axis.text        = element_blank(),
+        axis.ticks       = element_blank(),
+        axis.title       = element_blank(),
+        legend.position  = "bottom"
       )
 
-    # ── Patchwork zusammenbauen UND zurückgeben ──
+    # ── Patchwork ──
     (p_heat / p_bar) +
       plot_layout(heights = c(5, 1)) +
       plot_annotation(
-        title    = sprintf("Deutschland gegen %s", opp_nm),
-        # subtitle = sprintf(
-        #   "%s Simulationen  ·  Poisson + ELO Modell  ·  Häufigkeiten aus simulierten Spielständen",
-        #   format(mc$n_sims, big.mark = ",")),
+        title = sprintf("Deutschland gegen %s", opp_nm),
         theme = theme(
           plot.title    = element_text(colour = TEXT,  size = 15, face = "bold",
                                        family = FONT,  margin = margin(b = 4)),
@@ -184,9 +246,7 @@ plot_germany_matrix_dc <- function(dc, teams_init,
       )
   })
 
-  # Liste mit Gegner-Namen benennen
   names(plots) <- opps$team_name
-
   plots
 }
 
@@ -290,7 +350,7 @@ plot_group_winners_dc <- function(dc_results, teams_init) {
              fill = LIME, width = 0.55) +
     geom_text(
       aes(x = win_prob * 100,
-          label = sprintf("%.0f%%", win_prob * 100)),
+          label = ifelse(win_prob > 0.01,sprintf("%.0f%%", win_prob * 100),"")),
       hjust = -0.15,
       colour = TEXT,
       size = 2.6,
@@ -304,7 +364,7 @@ plot_group_winners_dc <- function(dc_results, teams_init) {
       title    = "Gruppensieger",
       subtitle = sprintf(
         "%s Simulationen  ·  Nur Mannschaften mit > 0.5%% Wahrscheinlichkeit",
-        format(mc$n_sims, big.mark = ",")),
+        format(dc_results$n_sims, big.mark = ",")),
       x = NULL, y = NULL
     ) +
     theme_wc(9) +
@@ -315,8 +375,7 @@ plot_group_winners_dc <- function(dc_results, teams_init) {
       axis.text.x        = element_text(size = 7,   colour = MUTED),
       panel.grid.major.y = element_blank(),
       panel.spacing      = unit(0.7, "lines")
-    ) +
-    xlim(0, 105)
+    )
 }
 
 
@@ -377,12 +436,12 @@ teams <- read.csv("data/teams.csv")
 dc_results <- readRDS("dc/dc_results.rds")
 
 teams$team_name  <- translate(teams$team_name)
-dc_results$reach_df$team_name       <- translate(reach_df$team_name)
+dc_results$reach_df$team_name       <- translate(dc_results$reach_df$team_name)
 
 opps_aux = teams %>%
   filter(group_letter == "E", team_name != "Deutschland")
 
-p1 <- plot_germany_matrix_dc(dc, teams, germany_name = "Deutschland", max_g = 5, opps = opps_aux)
+p1 <- plot_germany_matrix_dc(dc, teams, germany_name = "Deutschland", max_g = 8, opps = opps_aux)
 ggsave("Figures/GERCuracao_dc.png",
        plot   = p1[1],
        width  = 6, height = 4,
