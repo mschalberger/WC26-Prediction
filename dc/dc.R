@@ -199,7 +199,7 @@ run_tournament_dc <- function(model_fit, teams_df,
 results <- run_mc_dc(
   model_fit = dc,   # your fitted dixoncoles/goalmodel object
   teams_df  = teams,  # must have: id, team_name, group_letter
-  n_sims    = 50000,
+  n_sims    = 10000,
   maxgoal   = 10
 )
 
