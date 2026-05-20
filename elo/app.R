@@ -200,8 +200,9 @@ default_params <- list(
   team_adjustments  = NULL,  # named numeric vector (id → ELO-Offset/Differenz) aus der ELO-Rangliste
   goal_scale        = 1.0,   # Multiplikator auf Poisson-λ (1 = original)
   draw_max          = 1/3,   # max. Wahrscheinlichkeit eines Unentschieden bei p_h = 0.5 (ELO-Gleichstand)
-  upset_factor      = 1.0    # interner Multiplikator: 1 = neutral, <1 = Außenseiter begünstigt, >1 = Favoriten begünstigt
+  upset_factor      = 1.0,   # interner Multiplikator: 1 = neutral, <1 = Außenseiter begünstigt, >1 = Favoriten begünstigt
                              # UI zeigt diesen Wert als (1 - upset_factor); Slider-Bereich -3 bis +3 entspricht intern 4 bis -2
+  prediction_model  = "elo"  # "elo" = bisherige ELO-Simulation, "dixon_coles" = DC-Tormatrizen
 )
 
 # Wendet die ELO-Modifier (Heimvorteil + Team-Boost + Per-Team-Adjustments)
@@ -236,13 +237,100 @@ apply_elo_modifiers <- function(teams_df, params) {
   teams_df
 }
 
+# ── DIXON-COLES ENGINE ───────────────────────────────────────
+
+dc_model_path <- "../dc/dc_model.rds"
+dc_model_fit  <- NULL
+dc_prob_cache <- new.env(parent = emptyenv())
+
+dc_available <- function() {
+  file.exists(dc_model_path) && requireNamespace("goalmodel", quietly = TRUE)
+}
+
+load_dc_model <- function() {
+  if (!dc_available()) {
+    stop("Dixon-Coles-Modell nicht verfügbar. Bitte goalmodel installieren und ../dc/dc_model.rds bereitstellen.")
+  }
+  if (is.null(dc_model_fit)) {
+    dc_model_fit <<- readRDS(dc_model_path)
+  }
+  dc_model_fit
+}
+
+get_dc_prob_matrix <- function(id_home, id_away) {
+  if (is.null(id_home) || is.null(id_away) || is.na(id_home) || is.na(id_away)) {
+    stop("Dixon-Coles benötigt gültige Team-IDs.")
+  }
+
+  key <- paste0(id_home, "_", id_away)
+  if (exists(key, envir = dc_prob_cache, inherits = FALSE)) {
+    return(get(key, envir = dc_prob_cache, inherits = FALSE))
+  }
+
+  model_fit <- load_dc_model()
+  host_ids  <- c(1L, 5L, 13L) # USA, Kanada, Mexiko
+  x1 <- matrix(c(0, as.integer(id_home %in% host_ids), 0), ncol = 3)
+  x2 <- matrix(c(as.integer(id_away %in% host_ids), 0), ncol = 2)
+  colnames(x1) <- c("home", "host", "friendly")
+  colnames(x2) <- c("host", "friendly")
+
+  mat <- goalmodel::predict_goals(
+    model_fit,
+    team1 = id_home,
+    team2 = id_away,
+    maxgoal = 10,
+    return_df = FALSE,
+    x1 = x1,
+    x2 = x2
+  )
+  if (is.list(mat)) mat <- mat[[1]]
+  if (!is.matrix(mat) || any(is.na(mat)) || sum(mat) <= 0) {
+    stop("Dixon-Coles konnte keine gültige Tormatrix berechnen für ", id_home, " vs ", id_away, ".")
+  }
+  mat <- mat / sum(mat)
+  assign(key, mat, envir = dc_prob_cache)
+  mat
+}
+
+sample_dc_score <- function(id_home, id_away) {
+  mat <- get_dc_prob_matrix(id_home, id_away)
+  probs <- as.vector(mat)
+  idx <- sample.int(length(probs), 1, prob = probs)
+  n_home <- nrow(mat)
+  home_goals <- (idx - 1) %% n_home
+  away_goals <- (idx - 1) %/% n_home
+  list(home_goals = home_goals, away_goals = away_goals, matrix = mat)
+}
+
+simulate_match_dc <- function(id_home, id_away, elo_home, elo_away) {
+  sc <- sample_dc_score(id_home, id_away)
+  outcome <- if (sc$home_goals > sc$away_goals) "home"
+  else if (sc$home_goals < sc$away_goals) "away"
+  else "draw"
+
+  mat <- sc$matrix
+  home_win_prob <- sum(mat[row(mat) > col(mat)])
+
+  list(home_goals    = sc$home_goals,
+       away_goals    = sc$away_goals,
+       outcome       = outcome,
+       new_elo_home  = elo_home,
+       new_elo_away  = elo_away,
+       pen_home_prob = home_win_prob)
+}
+
+dc_home_win_probability <- function(id_home, id_away) {
+  mat <- get_dc_prob_matrix(id_home, id_away)
+  sum(mat[row(mat) > col(mat)])
+}
+
 # ── ELO ENGINE ───────────────────────────────────────────────
 
 elo_expected <- function(ea, eb) 1 / (1 + 10^((eb - ea) / 400))
 
-simulate_match <- function(elo_home, elo_away,
-                           params = default_params,
-                           force_gh = NULL, force_ga = NULL) {
+simulate_match_elo <- function(elo_home, elo_away,
+                               params = default_params,
+                               force_gh = NULL, force_ga = NULL) {
 
   # ── Fixed result (real, already-played match): bypass simulation ──
   # ELO is NOT updated here — update_elo.R already reflects this match
@@ -332,6 +420,24 @@ simulate_match <- function(elo_home, elo_away,
        new_elo_away  = elo_away + k_adj * ((1 - act_h) - (1 - exp_h)))
 }
 
+simulate_match <- function(elo_home, elo_away,
+                           params = default_params,
+                           force_gh = NULL, force_ga = NULL,
+                           id_home = NULL, id_away = NULL) {
+
+  # Bereits gespielte Partien bleiben modellunabhängig fix.
+  if (!is.null(force_gh) && !is.null(force_ga)) {
+    return(simulate_match_elo(elo_home, elo_away, params = params,
+                              force_gh = force_gh, force_ga = force_ga))
+  }
+
+  if (identical(params$prediction_model, "dixon_coles")) {
+    return(simulate_match_dc(id_home, id_away, elo_home, elo_away))
+  }
+
+  simulate_match_elo(elo_home, elo_away, params = params)
+}
+
 # ── FIFA TIEBREAKER ──────────────────────────────────────────
 # FIFA group-stage tiebreakers in order:
 #   1. Points (overall)
@@ -419,9 +525,11 @@ run_group_stage <- function(teams_df, params = default_params) {
           fgh <- fixed$away_goals; fga <- fixed$home_goals
         }
         res <- simulate_match(elo_h, elo_a, params = params,
-                              force_gh = fgh, force_ga = fga)
+                              force_gh = fgh, force_ga = fga,
+                              id_home = h, id_away = a)
       } else {
-        res <- simulate_match(elo_h, elo_a, params = params)
+        res <- simulate_match(elo_h, elo_a, params = params,
+                              id_home = h, id_away = a)
       }
       elo_live[as.character(h)] <- res$new_elo_home
       elo_live[as.character(a)] <- res$new_elo_away
@@ -479,9 +587,11 @@ sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
       fgh <- fixed$away_goals; fga <- fixed$home_goals
     }
     res <- simulate_match(elo_h, elo_a, params = params,
-                          force_gh = fgh, force_ga = fga)
+                          force_gh = fgh, force_ga = fga,
+                          id_home = id_a, id_away = id_b)
   } else {
-    res <- simulate_match(elo_h, elo_a, params = params)
+    res <- simulate_match(elo_h, elo_a, params = params,
+                          id_home = id_a, id_away = id_b)
   }
 
   pens <- ""
@@ -490,7 +600,11 @@ sim_ko_match <- function(id_a, id_b, elo_live, teams_df,
     if (!is.null(fixed) && !is.na(fixed$pens_winner_id)) {
       winner <- fixed$pens_winner_id
     } else {
-      pa     <- elo_expected(elo_h, elo_a)
+      pa <- if (identical(params$prediction_model, "dixon_coles")) {
+        res$pen_home_prob %||% dc_home_win_probability(id_a, id_b)
+      } else {
+        elo_expected(elo_h, elo_a)
+      }
       winner <- ifelse(runif(1) < pa, id_a, id_b)
     }
   } else {
@@ -903,14 +1017,16 @@ ui <- fluidPage(
         text-transform: uppercase; font-weight: 400;
       }
       body:not(.light-mode) .control-label { color: #FFFFFF; }
-      #seed {
+      #seed_elo, #seed_dc {
         background: var(--input-bg); border: 1px solid var(--border); color: var(--text);
         border-radius: 6px; padding: 8px 12px; width: 120px;
         font-family: monospace; font-size: 14px;
         transition: background 0.3s, border-color 0.3s, color 0.3s;
       }
-      body:not(.light-mode) #seed { background: #000000; color: #FFFFFF; }
-      body:not(.light-mode) #seed::placeholder { color: #FFFFFF; }
+      body:not(.light-mode) #seed_elo,
+      body:not(.light-mode) #seed_dc { background: #000000; color: #FFFFFF; }
+      body:not(.light-mode) #seed_elo::placeholder,
+      body:not(.light-mode) #seed_dc::placeholder { color: #FFFFFF; }
       #run_btn {
         background: var(--gold); color: #000; border: none;
         font-family: 'Source Sans 3', Arial, sans-serif; font-weight: 700; font-size: 18px; letter-spacing: 2px;
@@ -1144,7 +1260,14 @@ ui <- fluidPage(
         gap: 14px 18px;
         padding: 16px;
       }
+      .settings-grid-fixed {
+        grid-template-columns: repeat(auto-fill, 200px);
+      }
       .settings-grid .control-group { margin: 0; }
+      .settings-box .tabbable + .settings-header { border-radius: 0; }
+      .settings-box > .tabbable > .tab-content {
+        display: none;
+      }
       /* Sekundärer Reset-Button: dezent, klar als Rückgängig-Aktion erkennbar.
          Im Header kompakter, damit die Headerhöhe nicht aufgebläht wird. */
       .btn-reset {
@@ -1296,13 +1419,15 @@ ui <- fluidPage(
         .wc-body { padding: 12px; }
         .control-bar { flex-direction: column; align-items: stretch; gap: 14px; }
         #run_btn { width: 100%; }
-        #seed { width: 100%; }
+        #seed_elo, #seed_dc { width: 100%; }
+        .settings-grid-fixed { grid-template-columns: 1fr; }
         .podium { flex-direction: column; gap: 8px; }
         .groups-grid { grid-template-columns: 1fr; }
         .nav-tabs > li > a { font-size: 11px; padding: 8px 8px; letter-spacing: 0; }
         .group-table td, .group-table th { padding: 5px 6px; font-size: 12px; }
         .ko-table td, .ko-table th { padding: 5px 8px; font-size: 12px; }
         .tab-content { padding: 12px; }
+        .settings-box > .tabbable > .tab-content { display: none; }
         .podium { flex-direction: column; gap: 8px; }
         .podium-card.first  { order: 1; }
         .podium-card.second { order: 2; }
@@ -1328,7 +1453,7 @@ ui <- fluidPage(
   div(class="wc-header",
       div(class="header-inner",
           div(class="header-branding",
-              p(class="wc-subtitle", "ELO-basierte Monte-Carlo-Simulation"),
+              p(class="wc-subtitle", "ELO- und Dixon-Coles-Simulation"),
               h1(class="wc-title", "🏆 FIFA WM 2026")
           ),
           div(style="display:flex; align-items:center; gap:20px;",
@@ -1350,6 +1475,13 @@ ui <- fluidPage(
 
       # ── EINSTELLUNGEN (permanent ausgeklappt) ───────────────────
       div(class="settings-box",
+        tabsetPanel(
+          id = "prediction_model",
+          type = "tabs",
+          tabPanel("ELO", value = "elo"),
+          tabPanel("Dixon-Coles", value = "dixon_coles")
+        ),
+
         # Header mit Titel links und Zurücksetzen-Button rechts in derselben Zeile.
         div(class="settings-header",
             div(class="settings-header-left",
@@ -1363,89 +1495,109 @@ ui <- fluidPage(
             ),
             actionButton("reset_btn", "↺  Zurücksetzen", class="btn-reset")
         ),
-        div(class="settings-grid",
 
-            # Zufallsgenerator Startwert (vormals Random Seed)
-            div(class="control-group",
-                div(class="control-label", "Startwert Zufallsgenerator"),
-                tags$input(id="seed", type="number", value="", min="1", max="99999",
-                           class="form-control", placeholder="zufällig")
-            ),
+        conditionalPanel(
+          condition = "input.prediction_model == 'elo'",
+          div(class="settings-grid",
+              # Zufallsgenerator Startwert (vormals Random Seed)
+              div(class="control-group",
+                  div(class="control-label", "Startwert Zufallsgenerator"),
+                  tags$input(id="seed_elo", type="number", value="", min="1", max="99999",
+                             class="form-control", placeholder="zufällig")
+              ),
 
-            # Turnier Elo Gewicht (vormals K-Factor / Lerngeschwindigkeit)
-            div(class="control-group",
-                div(class="control-label", "ELO-Faktor Turnier"),
-                sliderInput("k_slider", label=NULL, min=0, max=100, value=60, step=5,
-                            ticks=FALSE, width="100%")
-            ),
+              # Turnier Elo Gewicht (vormals K-Factor / Lerngeschwindigkeit)
+              div(class="control-group",
+                  div(class="control-label", "ELO-Faktor Turnier"),
+                  sliderInput("k_slider", label=NULL, min=0, max=100, value=60, step=5,
+                              ticks=FALSE, width="100%")
+              ),
 
-            # Tor-Modell als Radio-Buttons (klassisch, sofort sichtbar welche Option aktiv ist)
-            div(class="control-group score-mode-radio",
-                div(class="control-label", "Tor-Modell"),
-                radioButtons("use_historical", label = NULL,
-                             choices = c("Poisson"    = "0",
-                                         "Empirisch"  = "1"),
-                             selected = "0",
-                             inline = FALSE)
-            ),
+              # Tor-Modell als Radio-Buttons (klassisch, sofort sichtbar welche Option aktiv ist)
+              div(class="control-group score-mode-radio",
+                  div(class="control-label", "Tor-Modell"),
+                  radioButtons("use_historical", label = NULL,
+                               choices = c("Poisson"    = "0",
+                                           "Empirisch"  = "1"),
+                               selected = "0",
+                               inline = FALSE)
+              ),
 
-            # Heimvorteil USA / Kanada / Mexiko
-            div(class="control-group",
-                div(class="control-label", "Heimvorteil 🇺🇸🇨🇦🇲🇽"),
-                sliderInput("home_advantage", label=NULL,
-                            min=0, max=500, value=0, step=10,
-                            ticks=FALSE, width="100%")
-            ),
+              # Heimvorteil USA / Kanada / Mexiko
+              div(class="control-group",
+                  div(class="control-label", "Heimvorteil 🇺🇸🇨🇦🇲🇽"),
+                  sliderInput("home_advantage", label=NULL,
+                              min=0, max=500, value=0, step=10,
+                              ticks=FALSE, width="100%")
+              ),
 
-            # Außenseiter-Faktor
-            div(class="control-group",
-                div(class="control-label", "Außenseiter-Faktor"),
-                sliderInput("upset_factor", label=NULL,
-                            min=-3, max=3, value=0, step=0.1,
-                            ticks=FALSE, width="100%")
-            ),
+              # Außenseiter-Faktor
+              div(class="control-group",
+                  div(class="control-label", "Außenseiter-Faktor"),
+                  sliderInput("upset_factor", label=NULL,
+                              min=-3, max=3, value=0, step=0.1,
+                              ticks=FALSE, width="100%")
+              ),
 
-            # Torreichtum
-            div(class="control-group",
-                div(class="control-label", "Torreichtum"),
-                sliderInput("goal_scale", label=NULL,
-                            min=0.3, max=2.0, value=1.0, step=0.1,
-                            ticks=FALSE, width="100%")
-            ),
+              # Torreichtum
+              div(class="control-group",
+                  div(class="control-label", "Torreichtum"),
+                  sliderInput("goal_scale", label=NULL,
+                              min=0.3, max=2.0, value=1.0, step=0.1,
+                              ticks=FALSE, width="100%")
+              ),
 
-            # Unentschieden-Häufigkeit (max)
-            # Slider-Wert ist direkt die max. Wahrscheinlichkeit eines
-            # Unentschieden bei ELO-Gleichstand. Default 1/3 entspricht dem
-            # bisherigen Verhalten der App.
-            div(class="control-group",
-                div(class="control-label", "Unentschieden bei gleichem Elo"),
-                sliderInput("draw_max", label=NULL,
-                            min=0, max=1.0, value=.3, step=0.01,
-                            ticks=FALSE, width="100%")
-            ),
+              # Unentschieden-Häufigkeit (max)
+              # Slider-Wert ist direkt die max. Wahrscheinlichkeit eines
+              # Unentschieden bei ELO-Gleichstand. Default 1/3 entspricht dem
+              # bisherigen Verhalten der App.
+              div(class="control-group",
+                  div(class="control-label", "Unentschieden bei gleichem Elo"),
+                  sliderInput("draw_max", label=NULL,
+                              min=0, max=1.0, value=.3, step=0.01,
+                              ticks=FALSE, width="100%")
+              ),
 
-            # Team-Boost: Auswahl
-            div(class="control-group",
-                div(class="control-label", "ELO Änderung für …"),
-                selectInput("team_boost_id", label=NULL,
-                            choices = setNames(
-                              teams_init$id,
-                              paste(sapply(teams_init$fifa_code, get_flag),
-                                    teams_init$team_name_de)
-                            ),
-                            selected = (teams_init %>%
-                                          filter(fifa_code == "GER") %>%
-                                          pull(id))[1],
-                            width="100%")
-            ),
+              # Team-Boost: Auswahl
+              div(class="control-group",
+                  div(class="control-label", "ELO Änderung für …"),
+                  selectInput("team_boost_id", label=NULL,
+                              choices = setNames(
+                                teams_init$id,
+                                paste(sapply(teams_init$fifa_code, get_flag),
+                                      teams_init$team_name_de)
+                              ),
+                              selected = (teams_init %>%
+                                            filter(fifa_code == "GER") %>%
+                                            pull(id))[1],
+                              width="100%")
+              ),
 
-            # Team-Boost: ELO-Differenz
-            div(class="control-group",
-                div(class="control-label", "… ELO  Änderung"),
-                sliderInput("team_boost_value", label=NULL,
-                            min=-500, max=500, value=0, step=10,
-                            ticks=FALSE, width="100%")
-            )
+              # Team-Boost: ELO-Differenz
+              div(class="control-group",
+                  div(class="control-label", "… ELO  Änderung"),
+                  sliderInput("team_boost_value", label=NULL,
+                              min=-500, max=500, value=0, step=10,
+                              ticks=FALSE, width="100%")
+              )
+          )
+        ),
+
+        conditionalPanel(
+          condition = "input.prediction_model == 'dixon_coles'",
+          div(class="settings-grid settings-grid-fixed",
+              # Zufallsgenerator Startwert (vormals Random Seed)
+              div(class="control-group",
+                  div(class="control-label", "Startwert Zufallsgenerator"),
+                  tags$input(id="seed_dc", type="number", value="", min="1", max="99999",
+                             class="form-control", placeholder="zufällig")
+              ),
+              div(class="control-group",
+                  div(class="control-label", "Dixon-Coles"),
+                  tags$p(style="margin:0;color:var(--muted);font-size:15px;line-height:1.4;",
+                         "Die Schätzung basiert auf festen Parametern und kennt daher keine einstellbaren Regler.")
+              )
+          )
         )
       ),
 
@@ -1477,7 +1629,7 @@ ui <- fluidPage(
       # ── Haftungsausschluss am Fuß der App ───────────────────────
       div(class="disclaimer",
           div(class="disclaimer-title", "Hinweis"),
-          tags$p("Die hier gezeigte Simulation dient ausschließlich Bildungs- und Unterhaltungszwecken im Rahmen der Lehre am Fachbereich Wirtschaftswissenschaft der Freien Universität Berlin. Sie basiert auf einem statistischen Modell (ELO-Bewertungen, Monte-Carlo-Verfahren) und stellt weder eine sportliche Prognose noch eine Empfehlung dar – insbesondere nicht im Hinblick auf Sportwetten oder andere Formen des Glücksspiels."),
+          tags$p("Die hier gezeigte Simulation dient ausschließlich Bildungs- und Unterhaltungszwecken im Rahmen der Lehre am Fachbereich Wirtschaftswissenschaft der Freien Universität Berlin. Sie basiert auf statistischen Modellen (ELO-Bewertungen, Dixon-Coles, Monte-Carlo-Verfahren) und stellt weder eine sportliche Prognose noch eine Empfehlung dar – insbesondere nicht im Hinblick auf Sportwetten oder andere Formen des Glücksspiels."),
           tags$p("Die Freie Universität Berlin und der Fachbereich Wirtschaftswissenschaft übernehmen keine Haftung für Entscheidungen, die auf Grundlage dieser Simulation getroffen werden, oder für daraus resultierende Schäden gleich welcher Art. Die Nutzung erfolgt auf eigene Verantwortung.")
       )
   ),
@@ -1523,11 +1675,12 @@ ui <- fluidPage(
       $('#loader').removeClass('active');
     });
 
-    /* ── Reset-Handler: setzt Seed-Feld zurück ── */
+    /* ── Reset-Handler: setzt Seed-Felder zurück ── */
     /* (Slider/Select/Radio werden vom Server via update*Input zurückgesetzt) */
     $(document).on('shiny:connected', function() {
       Shiny.addCustomMessageHandler('resetUI', function(message) {
-        document.getElementById('seed').value = '';
+        document.getElementById('seed_elo').value = '';
+        document.getElementById('seed_dc').value = '';
       });
     });
   "))
@@ -1570,7 +1723,12 @@ server <- function(input, output, session) {
   observe({ result(run_tournament(seed = 111)) })
 
   observeEvent(input$run_btn, {
-    seed <- suppressWarnings(as.integer(input$seed))
+    seed_input <- if (identical(input$prediction_model, "dixon_coles")) {
+      input$seed_dc
+    } else {
+      input$seed_elo
+    }
+    seed <- suppressWarnings(as.integer(seed_input))
     if (is.na(seed)) seed <- as.integer(as.numeric(Sys.time())) %% .Machine$integer.max
 
     # Per-Team-ELO-Adjustments aus dem persistenten Cache einsammeln und in
@@ -1598,7 +1756,8 @@ server <- function(input, output, session) {
       team_adjustments = adj_vec,
       goal_scale       = as.numeric(input$goal_scale       %||% 1.0),
       draw_max         = as.numeric(input$draw_max         %||% (.3)),
-      upset_factor     = 1 - as.numeric(input$upset_factor %||% 0)
+      upset_factor     = 1 - as.numeric(input$upset_factor %||% 0),
+      prediction_model = input$prediction_model %||% "elo"
     ))
 
     result(run_tournament(seed = seed, params = user_params))
@@ -1618,6 +1777,7 @@ server <- function(input, output, session) {
     updateSliderInput(session, "draw_max",         value = default_params$draw_max)
     updateSliderInput(session, "team_boost_value", value = default_params$team_boost_value)
     updateRadioButtons(session, "use_historical",  selected = "0")
+    updateTabsetPanel(session, "prediction_model", selected = default_params$prediction_model)
     updateSelectInput(session, "team_boost_id",
                       selected = (teams_init %>%
                                     filter(fifa_code == "GER") %>%
