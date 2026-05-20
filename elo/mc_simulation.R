@@ -126,7 +126,7 @@ inline double elo_exp(double ea, double eb) {
 }
 inline double draw_p(double ph) {
   double z = ph - 0.5;
-  return (1.0/3.0) * std::exp(-(z*z) / (2.0*0.236875*0.236875));
+  return (0.3) * std::exp(-(z*z) / (2.0*0.3*0.3));
 }
 
 void sample_score(double pfw, int oc_code,

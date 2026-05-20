@@ -2,16 +2,21 @@ library(devtools)
 library(Rcpp)
 library(dplyr)
 library(tidyr)
+library(stringr)
+library(readr)
 pak::pak("jalapic/engsoccerdata")
 pak::pak("opisthokonta/goalmodel")
 library(goalmodel)
 
 teams <- read.csv("data/teams.csv")
+all_international_matches <- read_csv("data/all_international_matches.csv")
 
 test <- all_international_matches %>%
   select(1:20) %>%
   mutate(home = as.numeric(match_venue == "home"),
-         host = as.numeric(match_venue == "host_home")) %>%
+         host_home = as.numeric(match_venue == "host_home"),
+         host_away = as.numeric(match_venue == "host_away"),
+         friendly = as.numeric(tournament == "Int. Friendly Games")) %>%
   mutate(home_team = case_when(home_team == "Iran" ~ "IR Iran",
                               home_team == "Bosnia &amp; Herzegovina" ~ "Bosnia and Herzegovina",
                               home_team == "Türkiye" ~ "Turkey",
@@ -26,23 +31,38 @@ test <- all_international_matches %>%
   mutate(id_home = ifelse(is.na(id_home), home_team, id_home),
          id_away = ifelse(is.na(id_away), away_team, id_away)) %>%
   #filter(id_home %in% teams$id |id_away %in% teams$id) %>%
-  mutate(date = as.Date(date))
+  mutate(date = as.Date(date)) %>%
+  mutate(match_weight = case_when(
+    str_detect(tournament, "World Cup(?! Qual)") ~ 1.0,
+    str_detect(tournament, "Qual|Nations League") ~ 0.85,
+    str_detect(tournament, "Africa Cup | Gold Cup|Copa América|Euro(?! Qual)|Asian Cup") ~ 0.9,
+    str_detect(tournament, "Int. Friendly") ~ 0.4,
+    TRUE ~ 0.7
+  ))
 
-xx1_hfa <- matrix(c(test$home, test$host), ncol = 2)
-colnames(xx1_hfa) <- c("home", "host")
+xx1 <- matrix(c(test$home, test$host_home, test$friendly), ncol = 3)
+colnames(xx1) <- c("home", "host", "friendly")
+
+xx2 <- matrix(c(test$host_away, test$friendly), ncol = 2)
+colnames(xx2) <- c("host", "friendly")
 
 friendly <- ifelse(test$tournament == "Int. Friendly Games", .5, 1)
 
-my_weights <- weights_dc(test$date, xi=0.0015)
-plot(y = friendly*my_weights , x = test$date)
+my_weights <- weights_dc(test$date, xi = 0.0015) * friendly
+
+#my_weights <- ifelse(test$friendly == 1, my_weights_friendly, my_weights_comp)
+plot(y = my_weights , x = test$date)
 
 dc <- goalmodel(goals1 = test$home_score, goals2 = test$away_score,
                 team1 = test$id_home, team2 = test$id_away,
-                hfa = FALSE, weights = my_weights*friendly,
+                hfa = FALSE, weights = my_weights,
                 dc = T,
-                x1 = xx1_hfa)
+                x1 = xx1[,1:2],
+                x2 = xx2[,1, drop=FALSE])
 summary(dc)
+
 saveRDS(dc, "dc/dc_model.rds")
+#dc <- readRDS("dc/dc_model.rds")
 
 sourceCpp("dc/dc.cpp")
 
@@ -73,9 +93,10 @@ build_prob_map <- function(model_fit, teams_df, maxgoal = 10) {
 
     host_home <- h_id %in% HOST_IDS
     host_away <- a_id %in% HOST_IDS
-    x1 <- matrix(c(0, as.integer(host_home)), ncol = 2)
-    x2 <- matrix(c(0, as.integer(host_away)), ncol = 2)
-    colnames(x1) <- colnames(x2) <- c("home", "host")
+    x1 <- matrix(c(0, as.integer(host_home), 0), ncol = 3)
+    x2 <- matrix(c( as.integer(host_away), 0), ncol = 2)
+    colnames(x1) <- c("home", "host", "friendly")
+    colnames(x2) <- c("host", "friendly")
 
     mat <- tryCatch({
       res <- predict_goals(model_fit,
@@ -83,12 +104,12 @@ build_prob_map <- function(model_fit, teams_df, maxgoal = 10) {
                            team2    = a_id,
                            maxgoal  = maxgoal,
                            return_df = FALSE,
-                           x1 = x1,
-                           x2 = x2)
+                           x1 = x1[,1:2, drop=FALSE],
+                           x2 = x2[,1, drop=FALSE])
       # predict_goals returns a list of matrices (one per match pair)
       if (is.list(res)) res[[1]] else res
     }, error = function(e) {
-      message("  ERROR for ", h_nm, " vs ", a_nm, ": ", conditionMessage(e))
+      message("  ERROR for ", h_id, " vs ", a_id, ": ", conditionMessage(e))
       NULL
     })
 
@@ -196,7 +217,7 @@ run_tournament_dc <- function(model_fit, teams_df,
 results <- run_mc_dc(
   model_fit = dc,   # your fitted dixoncoles/goalmodel object
   teams_df  = teams,  # must have: id, team_name, group_letter
-  n_sims    = 10000,
+  n_sims    = 100000,
   maxgoal   = 10
 )
 
@@ -206,6 +227,7 @@ results$reach_df %>%
          `Round of 32`, `Group Winner`, `Round of 16`,
          `Quarter-Final`, `Semi-Final`, Final, Champion)
 
-write.csv(results$reach_df, "dc/dc_reach_df.csv", row.names = FALSE)
+saveRDS(results, "dc/dc_results.rds")
+
 
 

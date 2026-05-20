@@ -12,40 +12,39 @@ using namespace Rcpp;
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Match result struct
 struct MatchResult {
   int home_goals;
   int away_goals;
   int outcome; // 1=home win, 0=draw, -1=away win
 };
 
-// Sample a score from a (maxgoal+1)x(maxgoal+1) probability matrix.
-// mat is stored row-major: mat[i][j] = P(home=i, away=j)
-MatchResult sample_score(const NumericMatrix& mat, std::mt19937& rng) {
-  int n = mat.nrow(); // maxgoal + 1
-  int total = n * n;
+struct KOResult {
+  int winner, loser;
+  int winner_goals, loser_goals;
+};
 
-  // Build flat CDF
+MatchResult sample_score(const NumericMatrix& mat, std::mt19937& rng) {
+  int n = mat.nrow();
+  int total = n * n;
   std::vector<double> flat(total);
   for (int i = 0; i < n; ++i)
     for (int j = 0; j < n; ++j)
       flat[i * n + j] = mat(i, j);
-
   std::discrete_distribution<int> dist(flat.begin(), flat.end());
   int idx = dist(rng);
-
   int hg = idx / n;
   int ag = idx % n;
   int outcome = (hg > ag) ? 1 : (hg < ag) ? -1 : 0;
-
   return {hg, ag, outcome};
 }
 
-// In knockout matches a draw goes to penalties — coin-flip weighted by
-// the home-win probability derived from the score matrix.
-int resolve_draw_ko(int team_h, int team_a, std::mt19937& rng) {
+// Penalty shootout: shrink home win probability toward 0.5
+// alpha=1.0 → full 90-min strength; alpha=0.0 → pure 50/50
+int resolve_penalties(double p_home_wins, double alpha,
+                      std::mt19937& rng, int team_h, int team_a) {
+  double p_pen = 0.5 + alpha * (p_home_wins - 0.5);
   std::uniform_real_distribution<double> u(0.0, 1.0);
-  return (u(rng) < 0.5) ? team_h : team_a;
+  return (u(rng) < p_pen) ? team_h : team_a;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,12 +54,9 @@ int resolve_draw_ko(int team_h, int team_a, std::mt19937& rng) {
 struct TeamStat {
   int id;
   int pts = 0, gf = 0, ga = 0;
-  double tiebreak_rng = 0.0; // random tiebreaker
+  double tiebreak_rng = 0.0;
 };
 
-// Returns group standings sorted by (pts desc, gd desc, gf desc, random)
-// group_ids: team IDs in this group (exactly 4)
-// prob_map:  key = "h_a" string → NumericMatrix
 std::vector<TeamStat> simulate_group(
     const std::vector<int>& group_ids,
     const std::unordered_map<std::string, NumericMatrix>& prob_map,
@@ -73,31 +69,24 @@ std::vector<TeamStat> simulate_group(
     stats[id].tiebreak_rng = u(rng);
   }
 
-  // Round-robin: all pairs
   for (int i = 0; i < (int)group_ids.size(); ++i) {
     for (int j = i + 1; j < (int)group_ids.size(); ++j) {
       int h = group_ids[i], a = group_ids[j];
       std::string key = std::to_string(h) + "_" + std::to_string(a);
       auto it = prob_map.find(key);
-      if (it == prob_map.end()) {
-        // Reversed lookup
+
+      MatchResult res;
+      if (it != prob_map.end()) {
+        res = sample_score(it->second, rng);
+      } else {
         key = std::to_string(a) + "_" + std::to_string(h);
         it  = prob_map.find(key);
-        if (it == prob_map.end()) continue; // missing — skip
-
-        // Swap: matrix was built for (a, h), transpose roles
-        MatchResult res = sample_score(it->second, rng);
-        // away goals become home, home become away
-        int tmp = res.home_goals; res.home_goals = res.away_goals; res.away_goals = tmp;
-        res.outcome = -res.outcome;
-        stats[h].gf += res.home_goals; stats[h].ga += res.away_goals;
-        stats[a].gf += res.away_goals; stats[a].ga += res.home_goals;
-        if      (res.outcome ==  1) stats[h].pts += 3;
-        else if (res.outcome == -1) stats[a].pts += 3;
-        else { stats[h].pts += 1; stats[a].pts += 1; }
-        continue;
+        if (it == prob_map.end()) continue;
+        res = sample_score(it->second, rng);
+        int tmp = res.home_goals; res.home_goals = res.away_goals;
+        res.away_goals = tmp; res.outcome = -res.outcome;
       }
-      MatchResult res = sample_score(it->second, rng);
+
       stats[h].gf += res.home_goals; stats[h].ga += res.away_goals;
       stats[a].gf += res.away_goals; stats[a].ga += res.home_goals;
       if      (res.outcome ==  1) stats[h].pts += 3;
@@ -125,16 +114,18 @@ std::vector<TeamStat> simulate_group(
 // Knockout round
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Returns {winner_id, loser_id}
-std::pair<int,int> simulate_ko_match(
+KOResult simulate_ko_match(
     int team_h, int team_a,
     const std::unordered_map<std::string, NumericMatrix>& prob_map,
-    std::mt19937& rng)
+    std::mt19937& rng,
+    double pen_alpha = 0.35)
 {
   std::string key = std::to_string(team_h) + "_" + std::to_string(team_a);
   auto it = prob_map.find(key);
 
   MatchResult res;
+  bool swapped = false;
+
   if (it != prob_map.end()) {
     res = sample_score(it->second, rng);
   } else {
@@ -142,34 +133,50 @@ std::pair<int,int> simulate_ko_match(
     it  = prob_map.find(key);
     if (it != prob_map.end()) {
       res = sample_score(it->second, rng);
-      // swap perspective
-      int tmp = res.home_goals; res.home_goals = res.away_goals; res.away_goals = tmp;
-      res.outcome = -res.outcome;
+      int tmp = res.home_goals; res.home_goals = res.away_goals;
+      res.away_goals = tmp; res.outcome = -res.outcome;
+      swapped = true;
     } else {
-      // Fallback: 50/50 coin flip
       res = {0, 0, 0};
     }
   }
 
   int winner, loser;
-  if (res.outcome == 1)       { winner = team_h; loser = team_a; }
-  else if (res.outcome == -1) { winner = team_a; loser = team_h; }
-  else { // draw → penalty shootout
-    winner = resolve_draw_ko(team_h, team_a, rng);
+  int winner_goals, loser_goals;
+
+  if (res.outcome == 1) {
+    winner = team_h;        loser  = team_a;
+    winner_goals = res.home_goals; loser_goals = res.away_goals;
+  } else if (res.outcome == -1) {
+    winner = team_a;        loser  = team_h;
+    winner_goals = res.away_goals; loser_goals = res.home_goals;
+  } else {
+    // Draw → penalties; goals reflect the drawn scoreline
+    double p_home_wins = 0.5;
+    if (it != prob_map.end()) {
+      const NumericMatrix& m = it->second;
+      int n = m.nrow();
+      double p_hw = 0.0;
+      for (int i = 1; i < n; ++i)
+        for (int j = 0; j < i; ++j)
+          p_hw += m(i, j);
+      p_home_wins = swapped ? (1.0 - p_hw) : p_hw;
+    }
+    winner = resolve_penalties(p_home_wins, pen_alpha, rng, team_h, team_a);
     loser  = (winner == team_h) ? team_a : team_h;
+    // Both teams scored equally in the draw; assign home/away goals accordingly
+    winner_goals = (winner == team_h) ? res.home_goals : res.away_goals;
+    loser_goals  = (loser  == team_h) ? res.home_goals : res.away_goals;
   }
-  return {winner, loser};
+
+  return {winner, loser, winner_goals, loser_goals};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Third-place ranking (FIFA 2026 rules: best 8 of 12 groups)
+// Third-place ranking (best 8 of 12)
 // ─────────────────────────────────────────────────────────────────────────────
 
-std::vector<int> select_best_thirds(
-    const std::vector<TeamStat>& thirds,
-    const std::vector<int>& group_order) // group index 0..11
-{
-  // thirds[i] corresponds to group_order[i]
+std::vector<int> select_best_thirds(const std::vector<TeamStat>& thirds) {
   std::vector<int> idx(thirds.size());
   std::iota(idx.begin(), idx.end(), 0);
   std::sort(idx.begin(), idx.end(), [&](int a, int b) {
@@ -180,40 +187,33 @@ std::vector<int> select_best_thirds(
     if (ta.gf != tb.gf) return ta.gf > tb.gf;
     return false;
   });
-  std::vector<int> best8_ids;
+  std::vector<int> best8;
   for (int k = 0; k < 8 && k < (int)idx.size(); ++k)
-    best8_ids.push_back(thirds[idx[k]].id);
-  return best8_ids;
+    best8.push_back(thirds[idx[k]].id);
+  return best8;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Single tournament simulation
+// Single tournament
 // ─────────────────────────────────────────────────────────────────────────────
-
-// groups_list: named list of integer vectors (team IDs per group, A..L)
-// prob_list:   named list of NumericMatrix, names like "7_12"
-// Returns a named list with elimination counts per team per stage
 
 // [[Rcpp::export]]
 List simulate_tournament_cpp(
-    List groups_list,       // named list: group letter → int vector of team IDs
-    List prob_list,         // named list: "h_a" → NumericMatrix
-    int  seed = -1)
+    List groups_list,
+    List prob_list,
+    int  seed = -1,
+    double pen_alpha = 0.35)
 {
   std::mt19937 rng(seed < 0 ? std::random_device{}() : (unsigned)seed);
 
-  // Build probability map
   std::unordered_map<std::string, NumericMatrix> prob_map;
   CharacterVector prob_names = prob_list.names();
   for (int i = 0; i < prob_list.size(); ++i)
     prob_map[as<std::string>(prob_names[i])] = as<NumericMatrix>(prob_list[i]);
 
-  // Simulate all groups
   CharacterVector grp_names = groups_list.names();
-  int n_groups = groups_list.size(); // should be 12
+  int n_groups = groups_list.size();
 
-  // Per-group standings
-  // groups A..L → index 0..11
   std::vector<std::vector<TeamStat>> standings(n_groups);
   std::vector<std::string> grp_labels(n_groups);
   std::unordered_map<std::string, int> grp_idx;
@@ -226,128 +226,167 @@ List simulate_tournament_cpp(
     standings[g] = simulate_group(id_vec, prob_map, rng);
   }
 
+  // ── Group winners ─────────────────────────────────────────
   std::vector<int> group_winners(n_groups);
   for (int g = 0; g < n_groups; ++g)
     group_winners[g] = standings[g][0].id;
 
-  // Collect elimination lists
-  std::vector<int> group_out;   // 4th place + non-advancing 3rds
-  std::vector<int> r32_losers, r16_losers, qf_losers, sf_losers;
+  // ── Build per-team accumulators (group stage baseline) ────
+  // All teams indexed by id
+  std::unordered_map<int, int> acc_gf, acc_ga, acc_gp;
+  for (int g = 0; g < n_groups; ++g) {
+    for (int r = 0; r < 4; ++r) {
+      int id = standings[g][r].id;
+      acc_gf[id] = standings[g][r].gf;
+      acc_ga[id] = standings[g][r].ga;
+      acc_gp[id] = 3;
+    }
+  }
+
+  // Helper: record a KO match result into accumulators
+  auto record_ko = [&](const KOResult& kr) {
+    acc_gf[kr.winner] += kr.winner_goals;
+    acc_ga[kr.winner] += kr.loser_goals;
+    acc_gf[kr.loser]  += kr.loser_goals;
+    acc_ga[kr.loser]  += kr.winner_goals;
+    acc_gp[kr.winner]++;
+    acc_gp[kr.loser]++;
+  };
+
+  // ── Elimination lists ─────────────────────────────────────
+  std::vector<int> group_out;
+  std::vector<int> r32_losers, r16_losers, qf_losers, sf_losers_vec;
   int finalist = -1, champion = -1;
 
-  // 4th place teams are eliminated
   for (int g = 0; g < n_groups; ++g)
     group_out.push_back(standings[g][3].id);
 
-  // Collect 3rd place teams
   std::vector<TeamStat> thirds(n_groups);
   for (int g = 0; g < n_groups; ++g)
     thirds[g] = standings[g][2];
 
-  // Best 8 thirds advance
-  std::vector<int> group_order(n_groups);
-  std::iota(group_order.begin(), group_order.end(), 0);
-  std::vector<int> best8 = select_best_thirds(thirds, group_order);
+  std::vector<int> best8 = select_best_thirds(thirds);
 
-  // Non-advancing thirds → group_out
   for (int g = 0; g < n_groups; ++g) {
     int tid = standings[g][2].id;
     bool advances = std::find(best8.begin(), best8.end(), tid) != best8.end();
     if (!advances) group_out.push_back(tid);
   }
 
-  // Helper lambda: get team ID by group + rank (0-indexed rank)
   auto gt = [&](const std::string& grp, int rank) -> int {
     int gi = grp_idx.count(grp) ? grp_idx[grp] : -1;
     if (gi < 0 || rank >= (int)standings[gi].size()) return -1;
     return standings[gi][rank].id;
   };
 
+  // ── Round of 32 ───────────────────────────────────────────
   std::vector<std::pair<int,int>> r32_pairs = {
-    {gt("A",1), gt("B",1)},   // 2A vs 2B
-    {gt("C",0), gt("F",1)},   // 1C vs 2F
-    {gt("E",0), best8[0]},    // 1E vs 3rd
-    {gt("F",0), gt("C",1)},   // 1F vs 2C
-    {gt("E",1), gt("I",1)},   // 2E vs 2I
-    {gt("I",0), best8[1]},    // 1I vs 3rd
-    {gt("A",0), best8[2]},    // 1A vs 3rd
-    {gt("L",0), best8[3]},    // 1L vs 3rd
-    {gt("G",0), best8[4]},    // 1G vs 3rd
-    {gt("D",0), best8[5]},    // 1D vs 3rd
-    {gt("H",0), gt("J",1)},   // 1H vs 2J
-    {gt("K",1), gt("L",1)},   // 2K vs 2L
-    {gt("B",0), best8[6]},    // 1B vs 3rd
-    {gt("D",1), gt("G",1)},   // 2D vs 2G
-    {gt("J",0), gt("H",1)},   // 1J vs 2H
-    {gt("K",0), best8[7]}     // 1K vs 3rd
+    {gt("A",1), gt("B",1)},
+    {gt("C",0), gt("F",1)},
+    {gt("E",0), best8[0]},
+    {gt("F",0), gt("C",1)},
+    {gt("E",1), gt("I",1)},
+    {gt("I",0), best8[1]},
+    {gt("A",0), best8[2]},
+    {gt("L",0), best8[3]},
+    {gt("G",0), best8[4]},
+    {gt("D",0), best8[5]},
+    {gt("H",0), gt("J",1)},
+    {gt("K",1), gt("L",1)},
+    {gt("B",0), best8[6]},
+    {gt("D",1), gt("G",1)},
+    {gt("J",0), gt("H",1)},
+    {gt("K",0), best8[7]}
   };
 
   std::vector<int> r32_winners;
   for (auto& p : r32_pairs) {
     if (p.first < 0 || p.second < 0) { r32_winners.push_back(-1); continue; }
-    auto [w, l] = simulate_ko_match(p.first, p.second, prob_map, rng);
-    r32_winners.push_back(w);
-    r32_losers.push_back(l);
+    KOResult kr = simulate_ko_match(p.first, p.second, prob_map, rng, pen_alpha);
+    record_ko(kr);
+    r32_winners.push_back(kr.winner);
+    r32_losers.push_back(kr.loser);
   }
 
-  // Round of 16 — 8 matches: winners[0]vs[1], [2]vs[3], ...
+  // ── Round of 16 ───────────────────────────────────────────
   std::vector<int> r16_winners;
   for (int i = 0; i < 16; i += 2) {
     if (r32_winners[i] < 0 || r32_winners[i+1] < 0) {
       r16_winners.push_back(-1); continue;
     }
-    auto [w, l] = simulate_ko_match(r32_winners[i], r32_winners[i+1], prob_map, rng);
-    r16_winners.push_back(w);
-    r16_losers.push_back(l);
+    KOResult kr = simulate_ko_match(r32_winners[i], r32_winners[i+1], prob_map, rng, pen_alpha);
+    record_ko(kr);
+    r16_winners.push_back(kr.winner);
+    r16_losers.push_back(kr.loser);
   }
 
-  // Quarter-finals — 4 matches
+  // ── Quarter-finals ────────────────────────────────────────
   std::vector<int> qf_winners;
   for (int i = 0; i < 8; i += 2) {
     if (r16_winners[i] < 0 || r16_winners[i+1] < 0) {
       qf_winners.push_back(-1); continue;
     }
-    auto [w, l] = simulate_ko_match(r16_winners[i], r16_winners[i+1], prob_map, rng);
-    qf_winners.push_back(w);
-    qf_losers.push_back(l);
+    KOResult kr = simulate_ko_match(r16_winners[i], r16_winners[i+1], prob_map, rng, pen_alpha);
+    record_ko(kr);
+    qf_winners.push_back(kr.winner);
+    qf_losers.push_back(kr.loser);
   }
 
-  // Semi-finals — 2 matches
+  // ── Semi-finals ───────────────────────────────────────────
   std::vector<int> sf_winners;
-  std::vector<int> sf_losers_vec;
   for (int i = 0; i < 4; i += 2) {
     if (qf_winners[i] < 0 || qf_winners[i+1] < 0) {
       sf_winners.push_back(-1); sf_losers_vec.push_back(-1); continue;
     }
-    auto [w, l] = simulate_ko_match(qf_winners[i], qf_winners[i+1], prob_map, rng);
-    sf_winners.push_back(w);
-    sf_losers_vec.push_back(l);
+    KOResult kr = simulate_ko_match(qf_winners[i], qf_winners[i+1], prob_map, rng, pen_alpha);
+    record_ko(kr);
+    sf_winners.push_back(kr.winner);
+    sf_losers_vec.push_back(kr.loser);
   }
 
-  // Third-place play-off (ignored for reach probabilities, but recorded)
-  // Final
-  if (sf_winners.size() >= 2 && sf_winners[0] > 0 && sf_winners[1] > 0) {
-    auto [w, l] = simulate_ko_match(sf_winners[0], sf_winners[1], prob_map, rng);
-    champion = w;
-    finalist = l;
+  // ── Final ─────────────────────────────────────────────────
+  if ((int)sf_winners.size() >= 2 && sf_winners[0] > 0 && sf_winners[1] > 0) {
+    KOResult kr = simulate_ko_match(sf_winners[0], sf_winners[1], prob_map, rng, pen_alpha);
+    record_ko(kr);
+    champion = kr.winner;
+    finalist = kr.loser;
+  }
+
+  // ── Pack goals/games into output vectors ──────────────────
+  int n_teams = n_groups * 4;
+  IntegerVector goals_id_vec(n_teams), goals_for_vec(n_teams),
+  goals_ag_vec(n_teams), games_vec(n_teams);
+
+  int k = 0;
+  for (int g = 0; g < n_groups; ++g) {
+    for (int r = 0; r < 4; ++r, ++k) {
+      int id = standings[g][r].id;
+      goals_id_vec[k]  = id;
+      goals_for_vec[k] = acc_gf[id];
+      goals_ag_vec[k]  = acc_ga[id];
+      games_vec[k]     = acc_gp[id];
+    }
   }
 
   return List::create(
-    Named("group_out")  = wrap(group_out),
-    Named("r32_losers") = wrap(r32_losers),
-    Named("r16_losers") = wrap(r16_losers),
-    Named("qf_losers")  = wrap(qf_losers),
-    Named("sf_losers")  = wrap(sf_losers_vec),
-    Named("finalist")   = finalist,
-    Named("champion")   = champion,
+    Named("group_out")     = wrap(group_out),
+    Named("r32_losers")    = wrap(r32_losers),
+    Named("r16_losers")    = wrap(r16_losers),
+    Named("qf_losers")     = wrap(qf_losers),
+    Named("sf_losers")     = wrap(sf_losers_vec),
+    Named("finalist")      = finalist,
+    Named("champion")      = champion,
     Named("group_winners") = wrap(group_winners),
-    Named("group_labels")  = wrap(grp_labels)
+    Named("group_labels")  = wrap(grp_labels),
+    Named("goals_id")      = goals_id_vec,
+    Named("goals_for")     = goals_for_vec,
+    Named("goals_ag")      = goals_ag_vec,
+    Named("games_played")  = games_vec
   );
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Monte Carlo wrapper — called once from R, runs n_sims internally
+// Monte Carlo wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
 // [[Rcpp::export]]
@@ -355,7 +394,8 @@ List run_mc_cpp(
     List   groups_list,
     List   prob_list,
     int    n_sims,
-    int    seed_base = 42)
+    int    seed_base  = 42,
+    double pen_alpha  = 0.35)
 {
   std::mt19937 seed_rng(seed_base);
   std::uniform_int_distribution<int> seed_dist(0, 1e8);
@@ -364,7 +404,6 @@ List run_mc_cpp(
   CharacterVector grp_names = groups_list.names();
   int n_groups = groups_list.size();
 
-  // Collect team IDs and build group membership map
   std::unordered_map<int, std::string> team_group;
   for (int g = 0; g < n_groups; ++g) {
     IntegerVector ids = as<IntegerVector>(groups_list[g]);
@@ -375,17 +414,24 @@ List run_mc_cpp(
     }
   }
 
+  // Stage counters: 0=GroupOut, 1=R32, 2=R16, 3=QF, 4=SF, 5=Final, 6=Champion
   std::unordered_map<int, std::array<int,7>> elim;
-  for (int id : all_ids) elim[id] = {0,0,0,0,0,0,0};
-
-  // ── NEW: group-winner counter ─────────────────────────────────
   std::unordered_map<int, int> gwin;
-  for (int id : all_ids) gwin[id] = 0;
-  // ─────────────────────────────────────────────────────────────
+  std::unordered_map<int, int> total_gf;
+  std::unordered_map<int, int> total_ga;
+  std::unordered_map<int, int> total_gp;
+
+  for (int id : all_ids) {
+    elim[id]     = {0,0,0,0,0,0,0};
+    gwin[id]     = 0;
+    total_gf[id] = 0;
+    total_ga[id] = 0;
+    total_gp[id] = 0;
+  }
 
   for (int sim = 0; sim < n_sims; ++sim) {
     int s = seed_dist(seed_rng);
-    List r = simulate_tournament_cpp(groups_list, prob_list, s);
+    List r = simulate_tournament_cpp(groups_list, prob_list, s, pen_alpha);
 
     IntegerVector go  = r["group_out"];
     IntegerVector r32 = r["r32_losers"];
@@ -395,6 +441,7 @@ List run_mc_cpp(
     int fin  = as<int>(r["finalist"]);
     int chmp = as<int>(r["champion"]);
 
+    // ── Stage elimination counts ──────────────────────────────
     for (int id : go)  if (elim.count(id)) elim[id][0]++;
     for (int id : r32) if (elim.count(id)) elim[id][1]++;
     for (int id : r16) if (elim.count(id)) elim[id][2]++;
@@ -403,22 +450,39 @@ List run_mc_cpp(
     if (fin  > 0 && elim.count(fin))  elim[fin][5]++;
     if (chmp > 0 && elim.count(chmp)) elim[chmp][6]++;
 
-    // ── NEW: record group winners ─────────────────────────────
+    // ── Group winners ─────────────────────────────────────────
     IntegerVector gw = r["group_winners"];
     for (int id : gw)
       if (gwin.count(id)) gwin[id]++;
-      // ─────────────────────────────────────────────────────────
+
+      // ── Goals and games (all stages, from simulate_tournament_cpp) ──
+      IntegerVector g_ids = r["goals_id"];
+      IntegerVector g_for = r["goals_for"];
+      IntegerVector g_ag  = r["goals_ag"];
+      IntegerVector g_gp  = r["games_played"];
+
+      for (int k = 0; k < g_ids.size(); ++k) {
+        int id = g_ids[k];
+        if (total_gf.count(id)) {
+          total_gf[id] += g_for[k];
+          total_ga[id] += g_ag[k];
+          total_gp[id] += g_gp[k];
+        }
+      }
   }
 
   int n = all_ids.size();
-  IntegerVector  ids_out(n);
-  NumericVector  p_group(n), p_r32(n), p_r16(n), p_qf(n), p_sf(n), p_final(n), p_champ(n);
-  NumericVector  p_gwin(n);
+  IntegerVector ids_out(n);
+  NumericVector p_group(n), p_r32(n), p_r16(n), p_qf(n),
+  p_sf(n), p_final(n), p_champ(n);
+  NumericVector p_gwin(n);
+  NumericVector avg_gf(n), avg_ga(n), avg_gp(n);
 
   for (int i = 0; i < n; ++i) {
-    int id = all_ids[i];
+    int id    = all_ids[i];
     ids_out[i] = id;
-    double ns   = (double)n_sims;
+    double ns  = (double)n_sims;
+
     double pg   = elim[id][0] / ns;
     double pr32 = elim[id][1] / ns;
     double pr16 = elim[id][2] / ns;
@@ -428,24 +492,33 @@ List run_mc_cpp(
 
     p_group[i] = 1.0;
     p_r32[i]   = 1.0 - pg;
-    p_r16[i]   = p_r32[i]   - pr32;
-    p_qf[i]    = p_r16[i]   - pr16;
-    p_sf[i]    = p_qf[i]    - pqf;
-    p_final[i] = p_sf[i]    - psf;
+    p_r16[i]   = p_r32[i]  - pr32;
+    p_qf[i]    = p_r16[i]  - pr16;
+    p_sf[i]    = p_qf[i]   - pqf;
+    p_final[i] = p_sf[i]   - psf;
     p_champ[i] = pch;
-    p_gwin[i]  = gwin[id] / ns;
+    p_gwin[i]  = gwin[id]  / ns;
+
+    double gp_total = (double)total_gp[id];
+    avg_gf[i]  = gp_total > 0 ? (double)total_gf[id] / gp_total : 0.0;
+    avg_ga[i]  = gp_total > 0 ? (double)total_ga[id] / gp_total : 0.0;
+    avg_gp[i]  = gp_total / ns;
   }
 
   return List::create(
-    Named("id")           = ids_out,
-    Named("Group.Stage")  = p_group,
-    Named("Round.of.32")  = p_r32,
-    Named("Round.of.16")  = p_r16,
-    Named("Quarter.Final")= p_qf,
-    Named("Semi.Final")   = p_sf,
-    Named("Final")        = p_final,
-    Named("Champion")     = p_champ,
-    Named("GroupWinner")  = p_gwin,
-    Named("n_sims")       = n_sims
+    Named("id")              = ids_out,
+    Named("Group.Stage")     = p_group,
+    Named("Round.of.32")     = p_r32,
+    Named("Round.of.16")     = p_r16,
+    Named("Quarter.Final")   = p_qf,
+    Named("Semi.Final")      = p_sf,
+    Named("Final")           = p_final,
+    Named("Champion")        = p_champ,
+    Named("GroupWinner")     = p_gwin,
+    Named("avg_gf_per_game") = avg_gf,
+    Named("avg_ga_per_game") = avg_ga,
+    Named("avg_games")       = avg_gp,
+    Named("n_sims")          = n_sims
   );
 }
+
