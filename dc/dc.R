@@ -2,6 +2,7 @@ library(devtools)
 library(Rcpp)
 library(dplyr)
 library(tidyr)
+library(stringr)
 library(readr)
 pak::pak("jalapic/engsoccerdata")
 pak::pak("opisthokonta/goalmodel")
@@ -30,7 +31,14 @@ test <- all_international_matches %>%
   mutate(id_home = ifelse(is.na(id_home), home_team, id_home),
          id_away = ifelse(is.na(id_away), away_team, id_away)) %>%
   #filter(id_home %in% teams$id |id_away %in% teams$id) %>%
-  mutate(date = as.Date(date))
+  mutate(date = as.Date(date)) %>%
+  mutate(match_weight = case_when(
+    str_detect(tournament, "World Cup(?! Qual)") ~ 1.0,
+    str_detect(tournament, "Qual|Nations League") ~ 0.85,
+    str_detect(tournament, "Africa Cup | Gold Cup|Copa América|Euro(?! Qual)|Asian Cup") ~ 0.9,
+    str_detect(tournament, "Int. Friendly") ~ 0.4,
+    TRUE ~ 0.7
+  ))
 
 xx1 <- matrix(c(test$home, test$host_home, test$friendly), ncol = 3)
 colnames(xx1) <- c("home", "host", "friendly")
@@ -40,16 +48,19 @@ colnames(xx2) <- c("host", "friendly")
 
 friendly <- ifelse(test$tournament == "Int. Friendly Games", .5, 1)
 
-my_weights <- weights_dc(test$date, xi=0.0015)
-plot(y = friendly*my_weights , x = test$date)
+my_weights <- weights_dc(test$date, xi = 0.0015) * friendly
+
+#my_weights <- ifelse(test$friendly == 1, my_weights_friendly, my_weights_comp)
+plot(y = my_weights , x = test$date)
 
 dc <- goalmodel(goals1 = test$home_score, goals2 = test$away_score,
                 team1 = test$id_home, team2 = test$id_away,
                 hfa = FALSE, weights = my_weights,
                 dc = T,
-                x1 = xx1,
-                x2 = xx2)
+                x1 = xx1[,1:2],
+                x2 = xx2[,1, drop=FALSE])
 summary(dc)
+
 saveRDS(dc, "dc/dc_model.rds")
 #dc <- readRDS("dc/dc_model.rds")
 
@@ -93,8 +104,8 @@ build_prob_map <- function(model_fit, teams_df, maxgoal = 10) {
                            team2    = a_id,
                            maxgoal  = maxgoal,
                            return_df = FALSE,
-                           x1 = x1,
-                           x2 = x2)
+                           x1 = x1[,1:2, drop=FALSE],
+                           x2 = x2[,1, drop=FALSE])
       # predict_goals returns a list of matrices (one per match pair)
       if (is.list(res)) res[[1]] else res
     }, error = function(e) {
