@@ -1489,7 +1489,7 @@ ui <- fluidPage(
                 tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Einstellungen/index.html",
                        target="_blank", class="help-link",
                        "ℹ️ Einstellungshilfe"),
-                tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Methodik/index.html",
+                tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Prognose_Methodik/index.html",
                        target="_blank", class="help-link",
                        "📐 Methodik")
             ),
