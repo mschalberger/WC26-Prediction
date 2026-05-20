@@ -271,7 +271,7 @@ simulate_match <- function(elo_home, elo_away,
   # maximale Wahrscheinlichkeit für ein Unentschieden bei p_h = 0.5; mit
   # zunehmender Abweichung (eindeutigerer Favorit) fällt die Draw-WK gauss-
   # förmig gegen 0. Sigma steuert die Breite der Glocke und bleibt fix.
-  sigma  <- 0.236875
+  sigma  <- .3#0.236875
   draw_p <- params$draw_max * exp(-((p_h - 0.5)^2) / (2 * sigma^2))
   ph <- p_h * (1 - draw_p)
   pa <- (1 - p_h) * (1 - draw_p)
@@ -545,9 +545,9 @@ run_tournament <- function(seed = NULL, params = default_params) {
 
   thirds <- std %>% filter(rank == 3) %>%
     arrange(desc(pts), desc(gd), desc(gf), desc(elo)) %>% slice(1:8)
-  
+
   get_t <- function(grp, rnk) std %>% filter(group == grp, rank == rnk) %>% pull(id)
-  
+
   # ── FIFA WM-2026 Annex C: Zuordnung der Gruppendritten im Sechzehntelfinale ──
   # Welcher Gruppensieger gegen den Dritten WELCHER Gruppe spielt, haengt NICHT
   # vom Rang der Dritten ab, sondern von der KOMBINATION der acht Gruppen, aus
@@ -657,18 +657,18 @@ run_tournament <- function(seed = NULL, params = default_params) {
     "CFGHIJKL"="HGICJFLK", "DEFGHIJK"="EGJDHFIK", "DEFGHIJL"="EGJDHFLI", "DEFGHIKL"="EGIDHFLK", "DEFGHJKL"="EGJDHFLK",
     "DEFGIJKL"="EGIDJFLK", "DEFHIJKL"="EJIDHFLK", "DEGHIJKL"="EJIDHGLK", "DFGHIJKL"="HGIDJFLK", "EFGHIJKL"="EJIFHGLK"
   )
-  
+
   combo_key  <- paste(sort(thirds$group), collapse = "")
   assign_str <- annexC[[combo_key]]
   if (is.null(assign_str))
     stop("Annex-C-Kombination nicht gefunden: ", combo_key)
   third_for  <- setNames(strsplit(assign_str, "")[[1]],
                          c("A", "B", "D", "E", "G", "I", "K", "L"))
-  
+
   # id des Dritten der Gruppe, die laut Annex C gegen 'winner_grp' antritt
   third_id <- function(winner_grp)
     std %>% filter(group == third_for[[winner_grp]], rank == 3) %>% pull(id)
-  
+
   r32_pairs <- list(
     c(get_t("A",2), get_t("B",2)),
     c(get_t("C",1), get_t("F",2)),
@@ -1420,7 +1420,7 @@ ui <- fluidPage(
             div(class="control-group",
                 div(class="control-label", "Unentschieden bei gleichem Elo"),
                 sliderInput("draw_max", label=NULL,
-                            min=0, max=1.0, value=1/3, step=0.01,
+                            min=0, max=1.0, value=.3, step=0.01,
                             ticks=FALSE, width="100%")
             ),
 
@@ -1473,7 +1473,7 @@ ui <- fluidPage(
                   tabPanel("⚔️ K.O.-Runde",      div(style="margin-top:16px;", uiOutput("ko_ui"))),
                   tabPanel("📊 ELO-Rangliste",    div(style="margin-top:16px;", uiOutput("elo_ui")))
       ),
-      
+
       # ── Haftungsausschluss am Fuß der App ───────────────────────
       div(class="disclaimer",
           div(class="disclaimer-title", "Hinweis"),
@@ -1597,7 +1597,7 @@ server <- function(input, output, session) {
       team_boost_value = as.numeric(input$team_boost_value %||% 0),
       team_adjustments = adj_vec,
       goal_scale       = as.numeric(input$goal_scale       %||% 1.0),
-      draw_max         = as.numeric(input$draw_max         %||% (1/3)),
+      draw_max         = as.numeric(input$draw_max         %||% (.3)),
       upset_factor     = 1 - as.numeric(input$upset_factor %||% 0)
     ))
 
