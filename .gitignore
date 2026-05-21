@@ -4,4 +4,4 @@ Intern/*
 .Rproj.user/
 .DS_Store
 .RDataTmp*
-data/logs/
+data/logs/*

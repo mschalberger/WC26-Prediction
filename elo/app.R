@@ -21,6 +21,12 @@ library(DT)
 # Fehler beim Loggen werden abgefangen, damit die App auch bei
 # fehlender Schreibberechtigung / vollem Volume normal weiterläuft.
 session_log_file <- "../data/logs/sessions.tsv"
+# Log-Verzeichnis idempotent anlegen (lokal nicht vorhanden, Server schon).
+# Fehlschlag (z.B. read-only-FS) wird stillschweigend ignoriert.
+tryCatch(
+  dir.create(dirname(session_log_file), recursive = TRUE, showWarnings = FALSE),
+  error = function(e) invisible(NULL)
+)
 tryCatch({
   if (!dir.exists(dirname(session_log_file))) {
     dir.create(dirname(session_log_file), recursive = TRUE, showWarnings = FALSE)
@@ -202,7 +208,11 @@ default_params <- list(
   draw_max          = 1/3,   # max. Wahrscheinlichkeit eines Unentschieden bei p_h = 0.5 (ELO-Gleichstand)
   upset_factor      = 1.0,   # interner Multiplikator: 1 = neutral, <1 = Außenseiter begünstigt, >1 = Favoriten begünstigt
                              # UI zeigt diesen Wert als (1 - upset_factor); Slider-Bereich -3 bis +3 entspricht intern 4 bis -2
-  prediction_model  = "elo"  # "elo" = bisherige ELO-Simulation, "dixon_coles" = DC-Tormatrizen
+  prediction_model        = "elo", # "elo" = bisherige ELO-Simulation, "dixon_coles" = DC-Tormatrizen
+  dc_host_factor          = 1.0,   # Multiplikator auf den host-Koeffizienten des DC-Modells (1 = original, 0 = aus)
+  dc_intercept_delta      = 0,     # Δ auf den Intercept (globales Torniveau, log-Skala)
+  dc_attack_values        = NULL,  # named numeric (id → absoluter Slider-Wert 0–2.5, entspricht exp(attack_log))
+  dc_defense_values       = NULL   # named numeric (id → absoluter Slider-Wert 0–2.5, entspricht exp(defense_log))
 )
 
 # Wendet die ELO-Modifier (Heimvorteil + Team-Boost + Per-Team-Adjustments)
@@ -243,6 +253,11 @@ dc_model_path <- "../dc/dc_model.rds"
 dc_model_fit  <- NULL
 dc_prob_cache <- new.env(parent = emptyenv())
 
+# Aktives DC-Modell mit aktuell angewendeten User-Overrides.
+# Wird zu Beginn jedes run_tournament-Aufrufs gesetzt (siehe dort).
+# Bleibt NULL, solange keine Simulation läuft (UI nutzt dann load_dc_model()).
+dc_active_model <- NULL
+
 dc_available <- function() {
   file.exists(dc_model_path) && requireNamespace("goalmodel", quietly = TRUE)
 }
@@ -257,17 +272,61 @@ load_dc_model <- function() {
   dc_model_fit
 }
 
+# Wendet die User-Slider-Werte als additive Offsets (log-Skala) auf eine
+# Kopie des gefitteten Modells an. Globale Parameter (hfa, rho, intercept)
+# und per-Team-Parameter (attack, defense) werden separat behandelt.
+# Rückgabewert: identische Struktur wie das Original; nur $parameters wird ersetzt.
+apply_dc_overrides <- function(model_fit, params) {
+  m <- model_fit
+  p <- m$parameters
+  
+  if (!is.null(params$dc_host_factor) && !is.null(p$beta) && "host" %in% names(p$beta)) {
+    f <- as.numeric(params$dc_host_factor)
+    if (!is.na(f) && f != 1) {
+      p$beta[["host"]] <- p$beta[["host"]] * f
+    }
+  }
+  if (!is.null(params$dc_intercept_delta) && isTRUE(params$dc_intercept_delta != 0) && !is.null(p$intercept)) {
+    p$intercept <- p$intercept + as.numeric(params$dc_intercept_delta)
+  }
+  
+  # Per-Team-Slider liefern direkt die log-skalierten Modellparameter
+  # (attack bzw. defense). Range −5 bis +5. Slider = Originalwert ⇒
+  # Modell unverändert. Höheres attack = offensiver; höheres defense =
+  # bessere Abwehr (goalmodel-Konvention, NICHT invertiert).
+  apply_abs <- function(param_vec, abs_values) {
+    if (is.null(abs_values) || length(abs_values) == 0) return(param_vec)
+    abs_values <- abs_values[!is.na(abs_values)]
+    if (length(abs_values) == 0) return(param_vec)
+    nm_match <- intersect(names(abs_values), names(param_vec))
+    if (length(nm_match) == 0) return(param_vec)
+    for (k in nm_match) {
+      param_vec[k] <- as.numeric(abs_values[[k]])
+    }
+    param_vec
+  }
+  
+  if (!is.null(p$attack))  p$attack  <- apply_abs(p$attack,  params$dc_attack_values)
+  if (!is.null(p$defense)) p$defense <- apply_abs(p$defense, params$dc_defense_values)
+  
+  m$parameters <- p
+  m
+}
+
 get_dc_prob_matrix <- function(id_home, id_away) {
   if (is.null(id_home) || is.null(id_away) || is.na(id_home) || is.na(id_away)) {
     stop("Dixon-Coles benötigt gültige Team-IDs.")
   }
-
+  
   key <- paste0(id_home, "_", id_away)
   if (exists(key, envir = dc_prob_cache, inherits = FALSE)) {
     return(get(key, envir = dc_prob_cache, inherits = FALSE))
   }
-
-  model_fit <- load_dc_model()
+  
+  # Während einer Turnier-Simulation: das (ggf. modifizierte) aktive Modell nutzen.
+  # Außerhalb (z.B. wenn die DC-Funktionen für UI-Vorschauen direkt gerufen werden):
+  # auf das Originalmodell zurückfallen.
+  model_fit <- if (!is.null(dc_active_model)) dc_active_model else load_dc_model()
   host_ids  <- c(1L, 5L, 13L) # USA, Kanada, Mexiko
   x1 <- matrix(c(0, as.integer(id_home %in% host_ids), 0), ncol = 3)
   x2 <- matrix(c(as.integer(id_away %in% host_ids), 0), ncol = 2)
@@ -284,10 +343,18 @@ get_dc_prob_matrix <- function(id_home, id_away) {
     x2 = x2
   )
   if (is.list(mat)) mat <- mat[[1]]
-  if (!is.matrix(mat) || any(is.na(mat)) || sum(mat) <= 0) {
+  if (!is.matrix(mat) || any(is.na(mat))) {
     stop("Dixon-Coles konnte keine gültige Tormatrix berechnen für ", id_home, " vs ", id_away, ".")
   }
-  mat <- mat / sum(mat)
+  # Extreme ρ-Werte können einzelne Zellen der Tau-Korrektur negativ werden lassen.
+  # Vor der Normalisierung clampen, sonst füttert sample.int() negative
+  # Wahrscheinlichkeiten und löscht den Worker.
+  mat[mat < 0] <- 0
+  s <- sum(mat)
+  if (s <= 0) {
+    stop("Dixon-Coles konnte keine gültige Tormatrix berechnen für ", id_home, " vs ", id_away, ".")
+  }
+  mat <- mat / s
   assign(key, mat, envir = dc_prob_cache)
   mat
 }
@@ -652,7 +719,16 @@ run_tournament <- function(seed = NULL, params = default_params) {
 
   # Heimvorteil + Team-Boost + Per-Team-Adjustments VOR Turnierstart aufschlagen
   teams_df <- apply_elo_modifiers(teams_init, params)
-
+  
+  # Dixon-Coles: User-Overrides auf das gefittete Modell anwenden und Cache leeren.
+  # Außerhalb des DC-Modus bleibt dc_active_model NULL und das Original wird benutzt.
+  rm(list = ls(dc_prob_cache, all.names = TRUE), envir = dc_prob_cache)
+  dc_active_model <<- if (identical(params$prediction_model, "dixon_coles") && dc_available()) {
+    apply_dc_overrides(load_dc_model(), params)
+  } else {
+    NULL
+  }
+  
   gs       <- run_group_stage(teams_df, params = params)
   elo_live <- gs$elo_live
   std      <- gs$standings
@@ -1523,14 +1599,6 @@ ui <- fluidPage(
                                inline = FALSE)
               ),
 
-              # Heimvorteil USA / Kanada / Mexiko
-              div(class="control-group",
-                  div(class="control-label", "Heimvorteil 🇺🇸🇨🇦🇲🇽"),
-                  sliderInput("home_advantage", label=NULL,
-                              min=0, max=500, value=0, step=10,
-                              ticks=FALSE, width="100%")
-              ),
-
               # Außenseiter-Faktor
               div(class="control-group",
                   div(class="control-label", "Außenseiter-Faktor"),
@@ -1585,18 +1653,31 @@ ui <- fluidPage(
 
         conditionalPanel(
           condition = "input.prediction_model == 'dixon_coles'",
-          div(class="settings-grid settings-grid-fixed",
-              # Zufallsgenerator Startwert (vormals Random Seed)
+          div(class="settings-grid",
+              # Zufallsgenerator Startwert
               div(class="control-group",
                   div(class="control-label", "Startwert Zufallsgenerator"),
                   tags$input(id="seed_dc", type="number", value="", min="1", max="99999",
                              class="form-control", placeholder="zufällig")
               ),
+              
+              # Heimvorteil USA / Kanada / Mexiko: Multiplikator auf den
+              # host-Koeffizienten des Modells. 1 = original, 0 = aus, > 1 = verstärkt.
               div(class="control-group",
-                  div(class="control-label", "Dixon-Coles"),
-                  tags$p(style="margin:0;color:var(--muted);font-size:15px;line-height:1.4;",
-                         "Die Schätzung basiert auf festen Parametern und kennt daher keine einstellbaren Regler.")
-              )
+                  div(class="control-label", "Heimvorteil 🇺🇸🇨🇦🇲🇽 (×)"),
+                  sliderInput("dc_host_factor", label=NULL,
+                              min=0, max=5, value=1, step=0.1,
+                              ticks=FALSE, width="100%")
+              ),
+              
+              # Torniveau / Intercept (Δ)
+              div(class="control-group",
+                  div(class="control-label", "Torniveau (Δ)"),
+                  sliderInput("dc_intercept_delta", label=NULL,
+                              min=-0.5, max=0.5, value=0, step=0.05,
+                              ticks=FALSE, width="100%")
+              ),
+              
           )
         )
       ),
@@ -1623,7 +1704,7 @@ ui <- fluidPage(
                   tabPanel("🏅 Gruppenübersicht", div(style="margin-top:16px;", uiOutput("groups_ui"))),
                   tabPanel("⚽ Gruppenspiele",   div(style="margin-top:16px;", uiOutput("group_matches_ui"))),
                   tabPanel("⚔️ K.O.-Runde",      div(style="margin-top:16px;", uiOutput("ko_ui"))),
-                  tabPanel("📊 ELO-Rangliste",    div(style="margin-top:16px;", uiOutput("elo_ui")))
+                  tabPanel("⚙️ Mannschaftseinstellung", div(style="margin-top:16px;", uiOutput("elo_ui")))
       ),
 
       # ── Haftungsausschluss am Fuß der App ───────────────────────
@@ -1718,7 +1799,46 @@ server <- function(input, output, session) {
       adj_state$values[[as.character(tid)]] <- as.numeric(input[[input_id]])
     }, ignoreInit = TRUE)
   })
-
+  
+  # ── Dixon-Coles: persistente Slider-States für Angriff & Abwehr (absolut, 0–2.5) ──
+  # Slider zeigen exp(attack_log) bzw. exp(defense_log) — d.h. 1.0 = neutral.
+  # Init aus dem gefitteten Modell, damit untouched = Originalverhalten.
+  # Fallback auf 1.0 (neutraler Wert), falls Modell oder Team-ID nicht verfügbar.
+  dc_init_values <- local({
+    n <- nrow(teams_init)
+    att_default <- setNames(as.list(rep(0, n)), as.character(teams_init$id))
+    def_default <- setNames(as.list(rep(0, n)), as.character(teams_init$id))
+    if (dc_available()) {
+      tryCatch({
+        fit <- load_dc_model()
+        p_a <- fit$parameters$attack
+        p_d <- fit$parameters$defense
+        mu_fit <- as.numeric(fit$parameters$intercept %||% 0)
+        for (idc in as.character(teams_init$id)) {
+          va <- p_a[idc]; vd <- p_d[idc]
+          # Slider-Init = direkter Modellparameter (log-Skala, Range ~−3 bis +1.5).
+          if (length(va) > 0 && !is.na(va)) att_default[[idc]] <- round(as.numeric(va), 2)
+          if (length(vd) > 0 && !is.na(vd)) def_default[[idc]] <- round(as.numeric(vd), 2)
+        }
+      }, error = function(e) {
+        message("DC-Initialisierung fehlgeschlagen: ", conditionMessage(e))
+      })
+    }
+    list(attack = att_default, defense = def_default)
+  })
+  dc_att_state <- reactiveValues(values = dc_init_values$attack)
+  dc_def_state <- reactiveValues(values = dc_init_values$defense)
+  lapply(teams_init$id, function(tid) {
+    att_id <- paste0("dc_att_", tid)
+    def_id <- paste0("dc_def_", tid)
+    observeEvent(input[[att_id]], {
+      dc_att_state$values[[as.character(tid)]] <- as.numeric(input[[att_id]])
+    }, ignoreInit = TRUE)
+    observeEvent(input[[def_id]], {
+      dc_def_state$values[[as.character(tid)]] <- as.numeric(input[[def_id]])
+    }, ignoreInit = TRUE)
+  })
+  
   # Run on startup with defaults (entspricht ursprünglichem Verhalten)
   observe({ result(run_tournament(seed = 111)) })
 
@@ -1745,19 +1865,36 @@ server <- function(input, output, session) {
     })
     names(adj_vec) <- as.character(teams_init$id)
 
+    # DC-Per-Team-Werte aus den reactiveValues einsammeln.
+    # Werte sind absolute Slider-Stände auf 0–2.5 Skala (exp(attack_log)).
+    dc_att_vec <- sapply(teams_init$id, function(tid) {
+      v <- dc_att_state$values[[as.character(tid)]]
+      if (is.null(v) || is.na(v)) 1.0 else as.numeric(v)
+    })
+    dc_def_vec <- sapply(teams_init$id, function(tid) {
+      v <- dc_def_state$values[[as.character(tid)]]
+      if (is.null(v) || is.na(v)) 1.0 else as.numeric(v)
+    })
+    names(dc_att_vec) <- as.character(teams_init$id)
+    names(dc_def_vec) <- as.character(teams_init$id)
+    
     # UI-Werte in params-Liste übersetzen.
     # Alle Defaults entsprechen dem Originalverhalten der App.
     user_params <- modifyList(default_params, list(
-      k                = as.integer(input$k_slider %||% 60),
-      use_historical   = isTRUE(input$use_historical == "1"),
-      home_advantage   = as.numeric(input$home_advantage   %||% 0),
-      team_boost_id    = as.integer(input$team_boost_id    %||% NA),
-      team_boost_value = as.numeric(input$team_boost_value %||% 0),
-      team_adjustments = adj_vec,
-      goal_scale       = as.numeric(input$goal_scale       %||% 1.0),
-      draw_max         = as.numeric(input$draw_max         %||% (.3)),
-      upset_factor     = 1 - as.numeric(input$upset_factor %||% 0),
-      prediction_model = input$prediction_model %||% "elo"
+      k                      = as.integer(input$k_slider %||% 60),
+      use_historical         = isTRUE(input$use_historical == "1"),
+      home_advantage         = as.numeric(input$home_advantage   %||% 0),
+      team_boost_id          = as.integer(input$team_boost_id    %||% NA),
+      team_boost_value       = as.numeric(input$team_boost_value %||% 0),
+      team_adjustments       = adj_vec,
+      goal_scale             = as.numeric(input$goal_scale       %||% 1.0),
+      draw_max               = as.numeric(input$draw_max         %||% (.3)),
+      upset_factor           = 1 - as.numeric(input$upset_factor %||% 0),
+      prediction_model       = input$prediction_model %||% "elo",
+      dc_host_factor         = as.numeric(input$dc_host_factor     %||% 1),
+      dc_intercept_delta     = as.numeric(input$dc_intercept_delta %||% 0),
+      dc_attack_values       = dc_att_vec,
+      dc_defense_values      = dc_def_vec
     ))
 
     result(run_tournament(seed = seed, params = user_params))
@@ -1770,18 +1907,26 @@ server <- function(input, output, session) {
   # Die Per-Team-Slider werden bewusst NICHT mit zurückgesetzt — dafür gibt es
   # einen eigenen Button in der ELO-Rangliste, weil sie konzeptuell dorthin gehören.
   observeEvent(input$reset_btn, {
-    updateSliderInput(session, "k_slider",         value = default_params$k)
-    updateSliderInput(session, "home_advantage",   value = default_params$home_advantage)
-    updateSliderInput(session, "upset_factor",     value = 0)   # Anzeige 0 = intern neutral (1.0)
-    updateSliderInput(session, "goal_scale",       value = default_params$goal_scale)
-    updateSliderInput(session, "draw_max",         value = default_params$draw_max)
-    updateSliderInput(session, "team_boost_value", value = default_params$team_boost_value)
-    updateRadioButtons(session, "use_historical",  selected = "0")
-    updateTabsetPanel(session, "prediction_model", selected = default_params$prediction_model)
-    updateSelectInput(session, "team_boost_id",
-                      selected = (teams_init %>%
-                                    filter(fifa_code == "GER") %>%
-                                    pull(id))[1])
+    # Modus-abhängig: nur die Slider des aktuell sichtbaren Tabs zurücksetzen.
+    # Insbesondere NICHT den Tab wechseln — der User bleibt da wo er ist.
+    current_mode <- input$prediction_model %||% "elo"
+    
+    if (identical(current_mode, "elo")) {
+      updateSliderInput(session, "k_slider",           value = default_params$k)
+      updateSliderInput(session, "home_advantage",     value = default_params$home_advantage)
+      updateSliderInput(session, "upset_factor",       value = 0)
+      updateSliderInput(session, "goal_scale",         value = default_params$goal_scale)
+      updateSliderInput(session, "draw_max",           value = default_params$draw_max)
+      updateSliderInput(session, "team_boost_value",   value = default_params$team_boost_value)
+      updateRadioButtons(session, "use_historical",    selected = "0")
+      updateSelectInput(session, "team_boost_id",
+                        selected = (teams_init %>%
+                                      filter(fifa_code == "GER") %>%
+                                      pull(id))[1])
+    } else if (identical(current_mode, "dixon_coles")) {
+      updateSliderInput(session, "dc_host_factor",     value = default_params$dc_host_factor)
+      updateSliderInput(session, "dc_intercept_delta", value = default_params$dc_intercept_delta)
+    }
     session$sendCustomMessage("resetUI", list())
   })
 
@@ -1795,6 +1940,28 @@ server <- function(input, output, session) {
       orig <- round(teams_init$elo[i])
       updateSliderInput(session, paste0("adj_", tid), value = orig)
       adj_state$values[[as.character(tid)]] <- orig
+    }
+  })
+  
+  # ── DC-Per-Team-Slider: Reset-Button in der Rangliste (DC-Modus) ──
+  # Setzt alle Angriffs-Δ und Abwehr-Δ Slider auf 0 zurück.
+  observeEvent(input$reset_dc_btn, {
+    # Reset = zurück zu den exp(Originalwerten) des gefitteten Modells.
+    fit_full <- if (dc_available()) tryCatch(load_dc_model(), error = function(e) NULL) else NULL
+    p_att <- if (dc_available()) tryCatch(load_dc_model()$parameters$attack,  error = function(e) NULL) else NULL
+    p_def <- if (dc_available()) tryCatch(load_dc_model()$parameters$defense, error = function(e) NULL) else NULL
+    
+    for (i in seq_len(nrow(teams_init))) {
+      tid <- teams_init$id[i]
+      idc <- as.character(tid)
+      av <- if (!is.null(p_att)) p_att[idc] else NA
+      dv <- if (!is.null(p_def)) p_def[idc] else NA
+      a_init <- if (length(av) > 0 && !is.na(av)) round(as.numeric(av), 2) else 0
+      d_init <- if (length(dv) > 0 && !is.na(dv)) round(as.numeric(dv), 2) else 0
+      updateSliderInput(session, paste0("dc_att_", tid), value = a_init)
+      updateSliderInput(session, paste0("dc_def_", tid), value = d_init)
+      dc_att_state$values[[idc]] <- a_init
+      dc_def_state$values[[idc]] <- d_init
     }
   })
 
@@ -1916,8 +2083,90 @@ server <- function(input, output, session) {
   # eines Slider-Eintrags ist der Wert = Original-Start-ELO (siehe Initialisierung
   # von adj_state oben), so dass das angezeigte Delta beim ersten Mal 0 ist.
   output$elo_ui <- renderUI({
+    mode <- input$prediction_model %||% "elo"
+    
+    # ── Dixon-Coles-Modus: Per-Team-Slider (absolut, 0–2.5; 1.0 = neutral) ──
+    if (identical(mode, "dixon_coles")) {
+      if (!dc_available()) {
+        return(div(style="margin-top:16px;color:var(--muted);",
+                   "Dixon-Coles-Modell nicht verfügbar."))
+      }
+      model_fit <- load_dc_model()
+      p_att <- model_fit$parameters$attack
+      p_def <- model_fit$parameters$defense
+      
+      # Sortierung nach Originalstärke (attack − defense auf log-Skala).
+      dc_df <- teams_init %>%
+        mutate(
+          id_chr      = as.character(id),
+          flag        = sapply(fifa_code, get_flag),
+          attack_log  = as.numeric(p_att[id_chr]),
+          defense_log = as.numeric(p_def[id_chr])
+        ) %>%
+        filter(!is.na(attack_log) & !is.na(defense_log)) %>%
+        arrange(desc(attack_log - defense_log))
+      if (nrow(dc_df) == 0) {
+        return(div(style="margin-top:16px;color:var(--muted);",
+                   "Keine Mannschaften mit Modellparametern gefunden."))
+      }
+      
+      dc_rows <- lapply(seq_len(nrow(dc_df)), function(i) {
+        row    <- dc_df[i,]
+        idc    <- as.character(row$id)
+        att_id <- paste0("dc_att_", row$id)
+        def_id <- paste0("dc_def_", row$id)
+        
+        # Slider-Startposition: persistenter State (per-Server-Init bereits
+        # mit exp(Originalwert) gefüllt). Fallback auf exp(Originalwert),
+        # falls State leer ist.
+        cur_att <- isolate(dc_att_state$values[[idc]])
+        cur_def <- isolate(dc_def_state$values[[idc]])
+        mu_fit <- as.numeric(model_fit$parameters$intercept %||% 0)
+        if (is.null(cur_att) || is.na(cur_att)) cur_att <- round(row$attack_log,  2)
+        if (is.null(cur_def) || is.na(cur_def)) cur_def <- round(row$defense_log, 2)
+        
+        tags$tr(
+          tags$td(as.character(i)),
+          tags$td(paste(row$flag, row$team_name_de)),
+          tags$td(div(class="elo-adj-slider",
+                      sliderInput(att_id, label = NULL,
+                                  min = -1, max = 2.5,
+                                  value = cur_att, step = 0.05,
+                                  ticks = FALSE, width = "100%"))),
+          tags$td(div(class="elo-adj-slider",
+                      sliderInput(def_id, label = NULL,
+                                  min = -1, max = 2.5,
+                                  value = cur_def, step = 0.05,
+                                  ticks = FALSE, width = "100%")))
+        )
+      })
+      
+      return(tagList(
+        div(class="elo-adj-reset-wrap",
+            actionButton("reset_dc_btn", "↺  DC-Anpassungen zurücksetzen", class="btn-reset")
+        ),
+        tags$table(class="ko-table elo-rangliste-table",
+                   tags$thead(tags$tr(
+                     tags$th("#"),
+                     tags$th("Team"),
+                     tags$th("Angriff"),
+                     tags$th("Abwehr")
+                   )),
+                   tags$tbody(dc_rows)
+        )
+      ))
+    }
+    
+    # ── ELO-Modus: bisherige Rangliste ──
     r <- result(); req(r)
     fe <- r$final_elo
+    # Wenn beim Modus-Wechsel das letzte Simulationsergebnis aus dem DC-Lauf
+    # stammt, hat es keine final_elo-Komponente. In dem Fall einen Platzhalter
+    # zeigen statt zu crashen.
+    if (is.null(fe) || !is.data.frame(fe) || nrow(fe) == 0) {
+      return(div(style="margin-top:16px;color:var(--muted);",
+                 "Bitte einmal 'Simulieren' drücken, um die ELO-Rangliste zu sehen."))
+    }
 
     rows <- lapply(seq_len(nrow(fe)), function(i) {
       row     <- fe[i,]
