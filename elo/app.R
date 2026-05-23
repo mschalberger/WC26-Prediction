@@ -10,12 +10,25 @@ library(DT)
 library(future)
 library(promises)
 
-# Anzahl Worker = (Cores − 1), mindestens 1.
-# Wert kann per Umgebungsvariable WM2026_WORKERS überschrieben werden,
-# damit Dienstag mit IT die Cores hochgesetzt werden können, ohne Code-Änderung.
-n_workers <- as.integer(Sys.getenv("WM2026_WORKERS", unset = max(1, parallel::detectCores() - 1)))
+# Worker-Anzahl: Auf dem Produktions-Server (erkannt am /srv/shiny-server-Pfad)
+# hardcoded 12 — systemd-Environment wird durch su --login geschluckt,
+# .Renviron ist fehleranfällig im Pfad. ENV-Variable hat trotzdem Vorrang,
+# falls man später ohne Code-Änderung umstellen will.
+# Lokal: dynamisch (detectCores - 1), damit Entwickler-Maschinen
+# nicht ihre gesamte CPU für die App verbrennen.
+n_workers <- local({
+  env_val <- Sys.getenv("WM2026_WORKERS", unset = "")
+  if (nzchar(env_val)) {
+    as.integer(env_val)
+  } else if (dir.exists("/srv/shiny-server")) {
+    12L   # Produktions-Server
+  } else {
+    max(1L, parallel::detectCores() - 1L)   # Lokale Entwicklung
+  }
+})
 future::plan(future::multisession, workers = n_workers)
 message("future plan: multisession mit ", n_workers, " Worker(n)")
+
 
 # Null-coalescing helper: gibt a zurück, wenn nicht-NULL und nicht-leer,
 # sonst b. Muss VOR der ersten Verwendung definiert sein (wird sowohl
