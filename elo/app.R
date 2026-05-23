@@ -21,7 +21,7 @@ n_workers <- local({
   if (nzchar(env_val)) {
     as.integer(env_val)
   } else if (dir.exists("/srv/shiny-server")) {
-    12L   # Produktions-Server
+    1L   # Produktions-Server
   } else {
     max(1L, parallel::detectCores() - 1L)   # Lokale Entwicklung
   }
