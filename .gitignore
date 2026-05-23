@@ -5,3 +5,5 @@ Intern/*
 .DS_Store
 .RDataTmp*
 data/logs/*
+/elo/recording.log
+/elo/report.html

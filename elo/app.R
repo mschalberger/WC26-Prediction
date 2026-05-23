@@ -7,6 +7,15 @@
 library(shiny)
 library(dplyr)
 library(DT)
+library(future)
+library(promises)
+
+# Anzahl Worker = (Cores − 1), mindestens 1.
+# Wert kann per Umgebungsvariable WM2026_WORKERS überschrieben werden,
+# damit Dienstag mit IT die Cores hochgesetzt werden können, ohne Code-Änderung.
+n_workers <- as.integer(Sys.getenv("WM2026_WORKERS", unset = max(1, parallel::detectCores() - 1)))
+future::plan(future::multisession, workers = n_workers)
+message("future plan: multisession mit ", n_workers, " Worker(n)")
 
 # Null-coalescing helper: gibt a zurück, wenn nicht-NULL und nicht-leer,
 # sonst b. Muss VOR der ersten Verwendung definiert sein (wird sowohl
@@ -933,6 +942,17 @@ run_tournament <- function(seed = NULL, params = default_params) {
 
 # ── UI ───────────────────────────────────────────────────────
 
+# Modul-weit gecachter Default-Lauf (seed = 111, default_params).
+# Erste Berechnung erfolgt lazy beim ersten Session-Start; danach
+# instantaner Return für alle weiteren Sessions im selben R-Prozess.
+default_result_cache <- local({
+  cached <- NULL
+  function() {
+    if (is.null(cached)) cached <<- run_tournament(seed = 111)
+    cached
+  }
+})
+
 ui <- fluidPage(
   tags$head(
     tags$meta(name="viewport", content="width=device-width, initial-scale=1.0"),
@@ -1840,7 +1860,10 @@ server <- function(input, output, session) {
   })
   
   # Run on startup with defaults (entspricht ursprünglichem Verhalten)
-  observe({ result(run_tournament(seed = 111)) })
+  # Wichtig: seed = 111 mit default_params ist deterministisch und für ALLE Sessions
+  # identisch. Wir berechnen das genau einmal pro R-Prozess und teilen das Ergebnis —
+  # spart bei N parallelen Session-Starts (N−1) Simulationen.
+  observe({ result(default_result_cache()) })
 
   observeEvent(input$run_btn, {
     seed_input <- if (identical(input$prediction_model, "dixon_coles")) {
@@ -1897,9 +1920,26 @@ server <- function(input, output, session) {
       dc_defense_values      = dc_def_vec
     ))
 
-    result(run_tournament(seed = seed, params = user_params))
+    # Asynchrone Berechnung im Hintergrund-Worker. Der R-Hauptprozess
+    # bleibt frei für andere Sessions, während diese Simulation läuft.
+    # Lokale Kopien, damit der Future garantiert die richtigen Werte
+    # captured (defensive Programmierung gegen Lazy-Evaluation-Überraschungen).
+    local_seed   <- seed
+    local_params <- user_params
+    future_promise({
+      run_tournament(seed = local_seed, params = local_params)
+    }, seed = TRUE) %...>%
+      result() %...!%
+      (function(e) {
+        showNotification(
+          paste("Simulation fehlgeschlagen:", conditionMessage(e)),
+          type = "error", duration = 10
+        )
+      })
+    # WICHTIG: NULL zurückgeben, damit observeEvent keinen Promise zurückgibt
+    # (Shiny würde sonst eine Warnung loggen).
+    NULL
   })
-
   # ── Zurücksetzen-Button: alle Einstellungen auf Default ──
   # Default-Werte stammen aus default_params (siehe Datei-Anfang).
   # JS-Anteil (Seed-Feld leeren) läuft über Custom Message,
