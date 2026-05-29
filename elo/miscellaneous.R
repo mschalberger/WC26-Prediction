@@ -280,9 +280,64 @@ load_data <- function() {
       team_name == "Winner UEFA Playoff D" ~ "Czechia",
       TRUE ~ team_name
     )) %>%
-    left_join(elo, by = c("team_name" = "country"))
+    left_join(elo, by = c("team_name" = "country")) %>%
+    mutate(fifa_code = case_when(
+      fifa_code == "CUR" ~ "CUW",
+      TRUE ~ fifa_code
+    ))
 
   dc <- readRDS("dc/dc_model.rds")
+  team_de <- c(
+    "Mexico"                 = "Mexiko",
+    "South Africa"           = "Südafrika",
+    "South Korea"            = "Südkorea",
+    "Czechia"                = "Tschechien",
+    "Canada"                 = "Kanada",
+    "Bosnia and Herzegovina" = "Bosnien und Herzegowina",
+    "Qatar"                  = "Katar",
+    "Switzerland"            = "Schweiz",
+    "Brazil"                 = "Brasilien",
+    "Morocco"                = "Marokko",
+    "Haiti"                  = "Haiti",
+    "Scotland"               = "Schottland",
+    "USA"                    = "USA",
+    "Paraguay"               = "Paraguay",
+    "Australia"              = "Australien",
+    "Turkey"                 = "Türkei",
+    "Germany"                = "Deutschland",
+    "Curaçao"                = "Curaçao",
+    "Côte d'Ivoire"          = "Côte d'Ivoire",
+    "Ecuador"                = "Ecuador",
+    "Netherlands"            = "Niederlande",
+    "Japan"                  = "Japan",
+    "Sweden"                 = "Schweden",
+    "Tunisia"                = "Tunesien",
+    "Belgium"                = "Belgien",
+    "Egypt"                  = "Ägypten",
+    "IR Iran"                = "Iran",
+    "New Zealand"            = "Neuseeland",
+    "Spain"                  = "Spanien",
+    "Cabo Verde"             = "Kap Verde",
+    "Saudi Arabia"           = "Saudi-Arabien",
+    "Uruguay"                = "Uruguay",
+    "France"                 = "Frankreich",
+    "Senegal"                = "Senegal",
+    "Iraq"                   = "Irak",
+    "Norway"                 = "Norwegen",
+    "Argentina"              = "Argentinien",
+    "Algeria"                = "Algerien",
+    "Austria"                = "Österreich",
+    "Jordan"                 = "Jordanien",
+    "Portugal"               = "Portugal",
+    "DR Congo"               = "DR Kongo",
+    "Uzbekistan"             = "Usbekistan",
+    "Colombia"               = "Kolumbien",
+    "England"                = "England",
+    "Croatia"                = "Kroatien",
+    "Ghana"                  = "Ghana",
+    "Panama"                 = "Panama"
+  )
+
   cbind(dc$parameters$attack, dc$parameters$defense) %>%
      as.data.frame() %>%
      setNames(c("attack", "defense")) %>%
@@ -290,7 +345,8 @@ load_data <- function() {
     filter(team_id %in% 1:48) %>%
     mutate(team_id = as.integer(team_id)) %>%
     left_join(teams_init, by = c("team_id" = "id")) %>%
-    left_join(fifa_rank, by = c("fifa_code" = "IdTeam"))
+    left_join(fifa_rank, by = c("fifa_code" = "IdTeam")) %>%
+    mutate(team_name = recode(team_name, !!!team_de))
 }
 
 combined_data <- load_data()
@@ -303,7 +359,7 @@ html_tab <- combined_data %>%
   mutate(attack = round(attack, 3),
          defense = round(defense, 3)) %>%
   arrange(Rank) %>%
-  knitr::kable(format = "html", col.names = c("Team Name", "FIFA Rank","Elo", "Attack", "Defense")) %>%
+  knitr::kable(format = "html", col.names = c("Team Name", "FIFA Rang","Elo", "Angriff", "Defensive")) %>%
   kableExtra::kable_styling(full_width = FALSE, position = "left") %>%
   kableExtra::row_spec(0, bold = TRUE)
 
