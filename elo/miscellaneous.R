@@ -2,6 +2,9 @@ library(dplyr)
 library(tidyr)
 library(nnet)
 library(ggplot2)
+library(rjson)
+library(knitr)
+library(kableExtra)
 
 load("data/elo_all_matches.RData")
 
@@ -227,3 +230,81 @@ ggplot(goals_long, aes(p_self, goals)) +
   theme_minimal()
 
 lambda <- predict(model, newdata = data.frame(p_self = df$p_h))
+
+# create html table for elo ranking
+elo_all_matches %>%
+  group_by(id_home, team_name_home) %>%
+  summarise(n = n(),
+            elo = max(elo_after_match_home)) %>%
+  arrange(desc(elo)) %>%
+  head(20) %>%
+  knitr::kable(format = "html", col.names = c("Team ID", "Team Name", "Matches", "Elo")) %>%
+  kableExtra::kable_styling(full_width = FALSE, position = "left") %>%
+  kableExtra::row_spec(0, bold = TRUE)
+
+load_data <- function() {
+  teams   <- read.csv("data/teams.csv", stringsAsFactors = FALSE)
+  elo_raw <- read.delim("https://www.eloratings.net/World.tsv?_=1776984277329",
+                        sep = "\t", header = FALSE)
+  ctry    <- read.delim("https://www.eloratings.net/en.teams.tsv?_=1772102421794",
+                        sep = "\t", header = FALSE)
+  fifa <- fromJSON(file ="https://api.fifa.com/api/v3/fifarankings/rankings/rankingsbyschedule?rankingScheduleId=FRS_Male_Football_20260119&language=en")
+  fifa_rank <- map_dfr(fifa$Results, function(x) {
+    tibble(
+      IdTeam = x$IdCountry,
+      TeamName = x$TeamName[[1]]$Description,
+      Rank = x$Rank
+    )
+  })
+
+
+  elo <- elo_raw %>%
+    left_join(ctry, by = c("V3" = "V1")) %>%
+    select(country = V2.y, elo = V4) %>%
+    mutate(country = case_when(
+      country == "United States"                ~ "USA",
+      country == "Iran"                         ~ "IR Iran",
+      country == "Cape Verde"                   ~ "Cabo Verde",
+      country == "Ivory Coast"                  ~ "Côte d'Ivoire",
+      country == "Democratic Republic of Congo" ~ "DR Congo",
+      TRUE ~ country
+    ))
+
+  teams_init <- teams %>%
+    mutate(team_name = case_when(
+      team_name == "Winner FIFA Playoff 1" ~ "DR Congo",
+      team_name == "Winner FIFA Playoff 2" ~ "Iraq",
+      team_name == "Winner UEFA Playoff B" ~ "Sweden",
+      team_name == "Winner UEFA Playoff C" ~ "Turkey",
+      team_name == "Winner UEFA Playoff A" ~ "Bosnia and Herzegovina",
+      team_name == "Winner UEFA Playoff D" ~ "Czechia",
+      TRUE ~ team_name
+    )) %>%
+    left_join(elo, by = c("team_name" = "country"))
+
+  dc <- readRDS("dc/dc_model.rds")
+  cbind(dc$parameters$attack, dc$parameters$defense) %>%
+     as.data.frame() %>%
+     setNames(c("attack", "defense")) %>%
+    tibble::rownames_to_column("team_id") %>%
+    filter(team_id %in% 1:48) %>%
+    mutate(team_id = as.integer(team_id)) %>%
+    left_join(teams_init, by = c("team_id" = "id")) %>%
+    left_join(fifa_rank, by = c("fifa_code" = "IdTeam"))
+}
+
+combined_data <- load_data()
+
+options(encoding = "UTF-8")
+Sys.setlocale("LC_ALL", "en_US.UTF-8")
+
+html_tab <- combined_data %>%
+  select(team_name, Rank, elo, attack, defense) %>%
+  mutate(attack = round(attack, 3),
+         defense = round(defense, 3)) %>%
+  arrange(Rank) %>%
+  knitr::kable(format = "html", col.names = c("Team Name", "FIFA Rank","Elo", "Attack", "Defense")) %>%
+  kableExtra::kable_styling(full_width = FALSE, position = "left") %>%
+  kableExtra::row_spec(0, bold = TRUE)
+
+writeLines(html_tab, "output/team_ranking_table.html")
