@@ -284,6 +284,36 @@ plot_champion_prob_dc <- function(dc_results, top_n = 10) {
     )
 }
 
+plot_total_goals_dc <- function(dc_results, top_n = 10) {
+  df <- dc_results$reach_df %>%
+    mutate(total_goals = avg_gf_per_game* avg_games) %>%
+    arrange(desc(total_goals)) %>%
+    slice(1:top_n) %>%
+    mutate(
+      team_name = factor(team_name, levels = rev(team_name))
+    )
+
+  ggplot(df, aes(x = total_goals, y = team_name)) +
+    geom_col(fill = LIME, colour = NA, width = 0.65) +
+    geom_text(aes(label = sprintf("%.2f", total_goals)),
+              hjust = -0.12, colour = TEXT,
+              size = 3.7, fontface = "bold", family = FONT) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.22))) +
+    labs(
+      title    = "Erwartete Tore pro Team",
+      subtitle = sprintf("Die Besten %d Nationen  ·  %s Simulationen",
+                         top_n, format(mc$n_sims, big.mark = ",")),
+      x = NULL, y = NULL
+    ) +
+    theme_wc(11) +
+    theme(
+      axis.text.y        = element_text(size = 10.5, colour = TEXT, face = "bold"),
+      axis.text.x        = element_text(size = 9,    colour = MUTED),
+      panel.grid.major.y = element_blank()
+    )
+}
+
+
 plot_germany_stages_dc <- function(dc_results, germany_name = "Deutschland") {
   stage_keys <- c("Round of 32","Round of 16","Quarter-Final",
                   "Semi-Final","Final","Champion")
@@ -479,6 +509,13 @@ ggsave("Figures/GERWeiterkommen_dc.png",
 p4 <- plot_group_winners_dc(dc_results, teams)
 ggsave("Figures/Gruppensieger_dc.png",
        plot   = p4,
+       width  = 6, height = 12,
+       dpi    = 300,
+       bg     = "white")
+
+p5 <- plot_total_goals_dc(dc_results, top_n = 10)
+ggsave("Figures/TotalGoals_dc.png",
+       plot   = p5,
        width  = 6, height = 12,
        dpi    = 300,
        bg     = "white")
