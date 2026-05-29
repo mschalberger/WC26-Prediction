@@ -363,6 +363,15 @@ ui <- fluidPage(
         border-top: none; border-radius: 0 0 10px 10px; padding: 20px;
         transition: background 0.3s, border-color 0.3s;
       }
+      /* Verschachtelte DC-Reiter (Angriff/Abwehr) in der Mannschafts-
+         einstellung: kein eigener Rahmen/Hintergrund, damit sie sich in das
+         umgebende Panel einfügen statt eine zweite Box zu erzeugen. */
+      .dc-tabs-wrap .tab-content {
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        padding: 12px 0 0 0;
+      }
 
       /* ── GROUPS ── */
       .groups-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px,1fr)); gap: 16px; }
@@ -565,6 +574,11 @@ ui <- fluidPage(
         color: #000000;
         text-decoration: none;
       }
+      /* Slot-Wrapper für die (server-seitig gerenderten) Hilfe-Links.
+         display:contents => der Wrapper-DIV selbst nimmt kein Layout ein,
+         die enthaltenen <a> bleiben direkte Flex-Kinder ihres Containers
+         (Desktop-Header bzw. Mobile-Buttonzeile) und behalten Abstände/Breite. */
+      .help-slot { display: contents; }
       /* Mobile-Hilfeknöpfe über/unter SIMULIEREN. Standardmäßig versteckt,
          im @media-Block für schmale Bildschirme aktiviert. */
       .help-link-mobile {
@@ -734,12 +748,7 @@ ui <- fluidPage(
         div(class="settings-header",
             div(class="settings-header-left",
                 span(class="settings-header-title", "⚙️  Einstellungen"),
-                tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Einstellungen/index.html",
-                       target="_blank", class="help-link",
-                       "ℹ️ Einstellungshilfe"),
-                tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Prognose_Methodik/index.html",
-                       target="_blank", class="help-link",
-                       "📐 Methodik")
+                uiOutput("help_links_desktop", class="help-slot")
             ),
             actionButton("reset_btn", "↺  Zurücksetzen", class="btn-reset")
         ),
@@ -789,8 +798,8 @@ ui <- fluidPage(
 
               # Unentschieden-Häufigkeit (max)
               # Slider-Wert ist direkt die max. Wahrscheinlichkeit eines
-              # Unentschieden bei ELO-Gleichstand. Default 1/3 entspricht dem
-              # bisherigen Verhalten der App.
+              # Unentschieden bei ELO-Gleichstand. Default 0.3 — einheitlich mit
+              # default_params$draw_max in simulation.R (vormals dort 1/3).
               div(class="control-group",
                   div(class="control-label", "Unentschieden bei gleichem Elo"),
                   sliderInput("draw_max", label=NULL,
@@ -856,9 +865,7 @@ ui <- fluidPage(
 
       # ── Mobile: Einstellungshilfe-Button (nur auf schmalen Bildschirmen sichtbar) ──
       div(class="help-link-mobile",
-          tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Einstellungen/index.html",
-                 target="_blank", class="help-link",
-                 "ℹ️ Einstellungshilfe")
+          uiOutput("help_link_einstellungen_mobile", class="help-slot")
       ),
       # ── Simulieren-Button (zentral, außerhalb der Box) ─────────
       div(class="run-section",
@@ -866,9 +873,7 @@ ui <- fluidPage(
       ),
       # ── Mobile: Methodik-Button (nur auf schmalen Bildschirmen sichtbar) ──
       div(class="help-link-mobile below",
-          tags$a(href="https://www.wiwiss.fu-berlin.de/wm2026/Methodik/index.html",
-                 target="_blank", class="help-link",
-                 "📐 Methodik")
+          uiOutput("help_link_methodik_mobile", class="help-slot")
       ),
       uiOutput("podium_ui"),
 
@@ -951,6 +956,43 @@ server <- function(input, output, session) {
   })
 
   result <- reactiveVal(NULL)
+
+  # ── Modell-abhängige Hilfe-Links (Einstellungen + Methodik) ──
+  # ELO und Dixon-Coles haben getrennte Hilfe-/Methodik-Seiten. Die Links
+  # werden server-seitig gerendert und folgen dem aktiven Reiter
+  # (input$prediction_model). Genutzt sowohl im Desktop-Header als auch in
+  # den beiden Mobile-Buttons.
+  help_urls <- reactive({
+    if (identical(input$prediction_model %||% "elo", "dixon_coles")) {
+      list(
+        einstellungen = "https://www.wiwiss.fu-berlin.de/wm2026/DC_Einstellungen.html",
+        methodik      = "https://www.wiwiss.fu-berlin.de/wm2026/DC_Methodik.html"
+      )
+    } else {
+      list(
+        einstellungen = "https://www.wiwiss.fu-berlin.de/wm2026/Elo_Einstellungen.html",
+        methodik      = "https://www.wiwiss.fu-berlin.de/wm2026/Elo_Methodik.html"
+      )
+    }
+  })
+
+  output$help_links_desktop <- renderUI({
+    u <- help_urls()
+    tagList(
+      tags$a(href = u$einstellungen, target = "_blank", class = "help-link",
+             "ℹ️ Einstellungshilfe"),
+      tags$a(href = u$methodik, target = "_blank", class = "help-link",
+             "📐 Methodik")
+    )
+  })
+  output$help_link_einstellungen_mobile <- renderUI({
+    tags$a(href = help_urls()$einstellungen, target = "_blank", class = "help-link",
+           "ℹ️ Einstellungshilfe")
+  })
+  output$help_link_methodik_mobile <- renderUI({
+    tags$a(href = help_urls()$methodik, target = "_blank", class = "help-link",
+           "📐 Methodik")
+  })
 
   # ── Persistenter Speicher für die Per-Team-ELO-Slider ──
   # Wir cachen die zuletzt vom User eingestellten Slider-Werte (Slider-Wert
@@ -1321,49 +1363,60 @@ server <- function(input, output, session) {
                    "Keine Mannschaften mit Modellparametern gefunden."))
       }
       
-      dc_rows <- lapply(seq_len(nrow(dc_df)), function(i) {
-        row    <- dc_df[i,]
-        idc    <- as.character(row$id)
-        att_id <- paste0("dc_att_", row$id)
-        def_id <- paste0("dc_def_", row$id)
-        
-        # Slider-Startposition: persistenter State (per-Server-Init bereits
-        # mit exp(Originalwert) gefüllt). Fallback auf exp(Originalwert),
-        # falls State leer ist.
-        cur_att <- isolate(dc_att_state$values[[idc]])
-        cur_def <- isolate(dc_def_state$values[[idc]])
-        mu_fit <- as.numeric(model_fit$parameters$intercept %||% 0)
-        if (is.null(cur_att) || is.na(cur_att)) cur_att <- round(row$attack_log,  2)
-        if (is.null(cur_def) || is.na(cur_def)) cur_def <- round(row$defense_log, 2)
-        
-        tags$tr(
-          tags$td(as.character(i)),
-          tags$td(paste(row$flag, row$team_name_de)),
-          tags$td(div(class="elo-adj-slider",
-                      sliderInput(att_id, label = NULL,
-                                  min = -1, max = 2.5,
-                                  value = cur_att, step = 0.05,
-                                  ticks = FALSE, width = "100%"))),
-          tags$td(div(class="elo-adj-slider",
-                      sliderInput(def_id, label = NULL,
-                                  min = -1, max = 2.5,
-                                  value = cur_def, step = 0.05,
-                                  ticks = FALSE, width = "100%")))
+      # Slider-Zeile (#, Team, EIN Slider) für einen Reiter bauen.
+      # `which` = "att" oder "def" wählt Angriffs- bzw. Abwehrparameter.
+      # Beide Reiter werden gleichzeitig ins DOM gerendert (Bootstrap blendet
+      # nur den inaktiven aus), damit beide Slider-Sätze registriert/persistent
+      # bleiben — auf dem Handy ist je Reiter nur EINE schmale Slider-Spalte
+      # sichtbar, sodass beide Werte mobil einstellbar sind.
+      make_dc_rows <- function(which) {
+        lapply(seq_len(nrow(dc_df)), function(i) {
+          row <- dc_df[i, ]
+          idc <- as.character(row$id)
+          if (identical(which, "att")) {
+            sid <- paste0("dc_att_", row$id)
+            cur <- isolate(dc_att_state$values[[idc]])
+            if (is.null(cur) || is.na(cur)) cur <- round(row$attack_log, 2)
+          } else {
+            sid <- paste0("dc_def_", row$id)
+            cur <- isolate(dc_def_state$values[[idc]])
+            if (is.null(cur) || is.na(cur)) cur <- round(row$defense_log, 2)
+          }
+          tags$tr(
+            tags$td(as.character(i)),
+            tags$td(paste(row$flag, row$team_name_de)),
+            tags$td(div(class="elo-adj-slider",
+                        sliderInput(sid, label = NULL,
+                                    min = -1, max = 2.5,
+                                    value = cur, step = 0.05,
+                                    ticks = FALSE, width = "100%")))
+          )
+        })
+      }
+
+      dc_table <- function(rows, value_header) {
+        tags$table(class="ko-table dc-team-table",
+                   tags$thead(tags$tr(
+                     tags$th("#"),
+                     tags$th("Team"),
+                     tags$th(value_header)
+                   )),
+                   tags$tbody(rows)
         )
-      })
-      
+      }
+
       return(tagList(
         div(class="elo-adj-reset-wrap",
             actionButton("reset_dc_btn", "↺  DC-Anpassungen zurücksetzen", class="btn-reset")
         ),
-        tags$table(class="ko-table elo-rangliste-table",
-                   tags$thead(tags$tr(
-                     tags$th("#"),
-                     tags$th("Team"),
-                     tags$th("Angriff"),
-                     tags$th("Abwehr")
-                   )),
-                   tags$tbody(dc_rows)
+        # Zwei Reiter: Angriffs- und Abwehrstärke getrennt, damit beide auch
+        # auf schmalen (mobilen) Displays vollständig bedienbar sind.
+        div(class="dc-tabs-wrap",
+            tabsetPanel(
+              id = "dc_team_tabs", type = "tabs",
+              tabPanel("Angriffsstärke", dc_table(make_dc_rows("att"), "Angriff")),
+              tabPanel("Abwehrstärke",   dc_table(make_dc_rows("def"), "Abwehr"))
+            )
         )
       ))
     }

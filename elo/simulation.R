@@ -168,7 +168,7 @@ default_params <- list(
   team_boost_value  = 0,     # ELO-Bonus für das gewählte Team
   team_adjustments  = NULL,  # named numeric vector (id → ELO-Offset/Differenz) aus der ELO-Rangliste
   goal_scale        = 1.0,   # Multiplikator auf Poisson-λ (1 = original)
-  draw_max          = 1/3,   # max. Wahrscheinlichkeit eines Unentschieden bei p_h = 0.5 (ELO-Gleichstand)
+  draw_max          = 0.3,   # max. Wahrscheinlichkeit eines Unentschieden bei p_h = 0.5 (ELO-Gleichstand); einheitlich mit UI-Default & Fallback in app.R
   upset_factor      = 1.0,   # interner Multiplikator: 1 = neutral, <1 = Außenseiter begünstigt, >1 = Favoriten begünstigt
                              # UI zeigt diesen Wert als (1 - upset_factor); Slider-Bereich -3 bis +3 entspricht intern 4 bis -2
   prediction_model        = "elo", # "elo" = bisherige ELO-Simulation, "dixon_coles" = DC-Tormatrizen
