@@ -6,7 +6,7 @@ library(scales)
 
 # ── CONFIG ───────────────────────────────────────────────────
 
-N_SIMS       <- 50000
+N_SIMS       <- 100000
 SEED         <- 42
 K            <- 60
 USE_HIST     <- TRUE

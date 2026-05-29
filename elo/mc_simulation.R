@@ -4,7 +4,7 @@ library(Rcpp)
 
 # ── CONFIG ───────────────────────────────────────────────────
 
-N_SIMS       <- 50000
+N_SIMS       <- 100000
 SEED         <- 42
 K            <- 60
 USE_HIST     <- TRUE
@@ -179,19 +179,28 @@ void sim_match(double& elo_h, double& elo_a, double k,
   double u = R::runif(0,1);
   int outcome = (u < ph) ? 0 : (u < ph + dp) ? 1 : 2;
 
-  bool hf    = (p_h >= 0.5);
-  double pfav = hf ? p_h : 1.0 - p_h;
-  double pfw  = pfav * (1.0 - draw_p(pfav));
-  int oc_code = (outcome == 1) ? 1 : ((outcome == 0) == hf) ? 0 : 2;
+  bool home_is_fav = (p_h >= 0.5);
+  double pfav = home_is_fav ? p_h : 1.0 - p_h;
+  // pfw only used for bin lookup — use pfav, not pfav*(1-draw_p)
+  double pfw  = pfav;
+
+  int oc_code;
+  if (outcome == 1) {
+    oc_code = 1;
+  } else if ((outcome == 0) == home_is_fav) {
+    oc_code = 0;
+  } else {
+    oc_code = 2;
+  }
 
   gh = -1; ga = -1;
   if (use_hist) {
     int fg, ug;
     sample_score(pfw, oc_code, sd_oc, sd_plo, sd_phi, sd_fg, sd_ug, sd_prob, fg, ug);
-    gh = hf ? fg : ug;
-    ga = hf ? ug : fg;
+    gh = home_is_fav ? fg : ug;
+    ga = home_is_fav ? ug : fg;
   }
-  if (gh < 0) {
+if (gh < 0) {
     double lh = 1.99419*(p_h) + 0.24629, la = 1.99419*(1-p_h) + 0.24629;
     int att = 0;
     do {
@@ -485,3 +494,4 @@ mc <- run_mc(dat$teams_init, dat$hist_sd,
              seed_base = SEED,
              n_sims    = N_SIMS)
 saveRDS(mc, "output/wc2026_mc_results.rds")
+
