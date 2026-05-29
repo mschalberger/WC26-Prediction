@@ -841,7 +841,7 @@ ui <- fluidPage(
                   tags$input(id="seed_dc", type="number", value="", min="1", max="99999",
                              class="form-control", placeholder="zufällig")
               ),
-              
+
               # Heimvorteil USA / Kanada / Mexiko: Multiplikator auf den
               # host-Koeffizienten des Modells. 1 = original, 0 = aus, > 1 = verstärkt.
               div(class="control-group",
@@ -850,7 +850,7 @@ ui <- fluidPage(
                               min=0, max=5, value=1, step=0.1,
                               ticks=FALSE, width="100%")
               ),
-              
+
               # Torniveau / Intercept (Δ)
               div(class="control-group",
                   div(class="control-label", "Torniveau (Δ)"),
@@ -858,7 +858,7 @@ ui <- fluidPage(
                               min=-0.5, max=0.5, value=0, step=0.05,
                               ticks=FALSE, width="100%")
               ),
-              
+
           )
         )
       ),
@@ -1013,7 +1013,7 @@ server <- function(input, output, session) {
       adj_state$values[[as.character(tid)]] <- as.numeric(input[[input_id]])
     }, ignoreInit = TRUE)
   })
-  
+
   # ── Dixon-Coles: persistente Slider-States für Angriff & Abwehr (absolut, 0–2.5) ──
   # Slider zeigen exp(attack_log) bzw. exp(defense_log) — d.h. 1.0 = neutral.
   # Init aus dem gefitteten Modell, damit untouched = Originalverhalten.
@@ -1052,7 +1052,7 @@ server <- function(input, output, session) {
       dc_def_state$values[[as.character(tid)]] <- as.numeric(input[[def_id]])
     }, ignoreInit = TRUE)
   })
-  
+
   # Run on startup with defaults (entspricht ursprünglichem Verhalten)
   # Wichtig: seed = 111 mit default_params ist deterministisch und für ALLE Sessions
   # identisch. Wir berechnen das genau einmal pro R-Prozess und teilen das Ergebnis —
@@ -1094,7 +1094,7 @@ server <- function(input, output, session) {
     })
     names(dc_att_vec) <- as.character(teams_init$id)
     names(dc_def_vec) <- as.character(teams_init$id)
-    
+
     # UI-Werte in params-Liste übersetzen.
     # Alle Defaults entsprechen dem Originalverhalten der App.
     user_params <- modifyList(default_params, list(
@@ -1163,7 +1163,7 @@ server <- function(input, output, session) {
     # Modus-abhängig: nur die Slider des aktuell sichtbaren Tabs zurücksetzen.
     # Insbesondere NICHT den Tab wechseln — der User bleibt da wo er ist.
     current_mode <- input$prediction_model %||% "elo"
-    
+
     if (identical(current_mode, "elo")) {
       updateSliderInput(session, "k_slider",           value = default_params$k)
       updateSliderInput(session, "home_advantage",     value = default_params$home_advantage)
@@ -1195,7 +1195,7 @@ server <- function(input, output, session) {
       adj_state$values[[as.character(tid)]] <- orig
     }
   })
-  
+
   # ── DC-Per-Team-Slider: Reset-Button in der Rangliste (DC-Modus) ──
   # Setzt alle Angriffs-Δ und Abwehr-Δ Slider auf 0 zurück.
   observeEvent(input$reset_dc_btn, {
@@ -1203,7 +1203,7 @@ server <- function(input, output, session) {
     fit_full <- if (dc_available()) tryCatch(load_dc_model(), error = function(e) NULL) else NULL
     p_att <- if (dc_available()) tryCatch(load_dc_model()$parameters$attack,  error = function(e) NULL) else NULL
     p_def <- if (dc_available()) tryCatch(load_dc_model()$parameters$defense, error = function(e) NULL) else NULL
-    
+
     for (i in seq_len(nrow(teams_init))) {
       tid <- teams_init$id[i]
       idc <- as.character(tid)
@@ -1337,7 +1337,7 @@ server <- function(input, output, session) {
   # von adj_state oben), so dass das angezeigte Delta beim ersten Mal 0 ist.
   output$elo_ui <- renderUI({
     mode <- input$prediction_model %||% "elo"
-    
+
     # ── Dixon-Coles-Modus: Per-Team-Slider (absolut, 0–2.5; 1.0 = neutral) ──
     if (identical(mode, "dixon_coles")) {
       if (!dc_available()) {
@@ -1347,7 +1347,7 @@ server <- function(input, output, session) {
       model_fit <- load_dc_model()
       p_att <- model_fit$parameters$attack
       p_def <- model_fit$parameters$defense
-      
+
       # Sortierung nach Originalstärke (attack − defense auf log-Skala).
       dc_df <- teams_init %>%
         mutate(
@@ -1362,7 +1362,7 @@ server <- function(input, output, session) {
         return(div(style="margin-top:16px;color:var(--muted);",
                    "Keine Mannschaften mit Modellparametern gefunden."))
       }
-      
+
       # Slider-Zeile (#, Team, EIN Slider) für einen Reiter bauen.
       # `which` = "att" oder "def" wählt Angriffs- bzw. Abwehrparameter.
       # Beide Reiter werden gleichzeitig ins DOM gerendert (Bootstrap blendet
@@ -1414,13 +1414,13 @@ server <- function(input, output, session) {
         div(class="dc-tabs-wrap",
             tabsetPanel(
               id = "dc_team_tabs", type = "tabs",
-              tabPanel("Angriffsstärke", dc_table(make_dc_rows("att"), "Angriff")),
-              tabPanel("Abwehrstärke",   dc_table(make_dc_rows("def"), "Abwehr"))
+              tabPanel("Angriffsstärke", dc_table(make_dc_rows("att"), "Angriffsstärke")),
+              tabPanel("Abwehrstärke",   dc_table(make_dc_rows("def"), "Abwehrstärke"))
             )
         )
       ))
     }
-    
+
     # ── ELO-Modus: bisherige Rangliste ──
     r <- result(); req(r)
     fe <- r$final_elo

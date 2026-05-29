@@ -487,8 +487,9 @@ plot_total_goals <- function(mc, top_n = 10) {
     arrange(desc(avg_goals)) %>%
     slice(1:top_n) %>%
     mutate(
-      team_name = factor(team_name, levels = rev(team_name))
-    )
+      team_name = factor(team_name, levels = rev(team_name)),
+      team_name =  recode(team_name, !!!team_de))
+
   ggplot(df, aes(x = avg_goals, y = team_name)) +
     geom_col(fill = LIME, colour = NA, width = 0.65) +
     geom_text(aes(label = sprintf("%.2f", avg_goals)),
