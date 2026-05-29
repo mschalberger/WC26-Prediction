@@ -242,6 +242,8 @@ List run_mc_cpp(
   // Use flat std::vector<int> for 2-D accumulators: [team * ncol + col]
   std::vector<int> elim(N * S, 0);
   std::vector<int> gwin(N * G, 0);
+  std::vector<long long> goals_scored(N, 0);
+  std::vector<long long> games_played(N, 0);
 
   std::vector<int> ger_opp_ids, ger_g_vec, ger_opp_g_vec;
   ger_opp_ids.reserve(n_sims * 3);
@@ -267,6 +269,10 @@ List run_mc_cpp(
                     sd_oc, sd_plo, sd_phi, sd_fg, sd_ug, sd_prob, gh, ga_m);
           gf[h]   += gh;  ga_t[h]  += ga_m;
           gf[av]  += ga_m; ga_t[av] += gh;
+          goals_scored[h]  += gh;
+          goals_scored[av] += ga_m;
+          games_played[h]++;
+          games_played[av]++;
           int diff = gh - ga_m;
           if      (diff > 0) pts[h]  += 3;
           else if (diff < 0) pts[av] += 3;
@@ -339,6 +345,12 @@ List run_mc_cpp(
         int gh, ga_m;
         sim_match(elo[h], elo[av], k, use_hist,
                   sd_oc, sd_plo, sd_phi, sd_fg, sd_ug, sd_prob, gh, ga_m);
+        // ADD THESE:
+        goals_scored[h]  += gh;
+        goals_scored[av] += ga_m;
+        games_played[h]++;
+        games_played[av]++;
+
         int w;
         int diff = gh - ga_m;
         if      (diff > 0) w = h;
@@ -403,13 +415,18 @@ List run_mc_cpp(
     og_v[i]   = ger_opp_g_vec[i];
   }
 
-  return List::create(
-    Named("reach")     = reach,
-    Named("gwin")      = gwin_prob,
-    Named("ger_opp")   = go_ids,
-    Named("ger_goals") = gg_v,
-    Named("opp_goals") = og_v
-  );
+NumericVector avg_goals(N);
+for (int i = 0; i < N; ++i)
+  avg_goals[i] = (double)goals_scored[i] / (double)n_sims;
+
+    return List::create(
+      Named("reach")      = reach,
+      Named("gwin")       = gwin_prob,
+      Named("ger_opp")    = go_ids,
+      Named("ger_goals")  = gg_v,
+      Named("opp_goals")  = og_v,
+      Named("avg_goals")  = avg_goals   // ADD THIS
+    );
 }
 ')
 
@@ -475,9 +492,18 @@ run_mc <- function(n_sims, teams_init, hist_sd,
     opp_goals = cpp_res$opp_goals
   )
 
+  goals_df <- data.frame(
+    id        = teams_init$id,
+    team_name = teams_init$team_name,
+    fifa_code = teams_init$fifa_code,
+    avg_goals = cpp_res$avg_goals
+  ) %>%
+    arrange(desc(avg_goals))
+
   list(reach_df      = reach_df,
        gwin_df       = gwin_df,
        ger_scores_df = ger_scores_df,
+       goals_df      = goals_df,       # ADD THIS
        n_sims        = n_sims)
 }
 

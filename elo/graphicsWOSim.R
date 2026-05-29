@@ -4,6 +4,9 @@ library(tidyr)
 library(patchwork)
 library(scales)
 
+options(scipen = 999)
+
+
 # ── CONFIG ───────────────────────────────────────────────────
 
 N_SIMS       <- 100000
@@ -184,137 +187,6 @@ analytical_score_dist <- function(elo_ger, elo_opp, hist_sd) {
     group_by(ger_goals, opp_goals) %>%
     summarise(prob = sum(joint_prob), .groups = "drop") %>%
     mutate(prob = prob / sum(prob))
-}
-
-# ══════════════════════════════════════════════════════════════
-# PLOT 1 — Germany Group Score Matrices  (ANALYTICAL)
-#
-# Each cell's fill = outcome region (WIN / DRAW / LOSS).
-# Each cell's text = joint probability of that exact scoreline.
-# No simulation — derived analytically from score_dist.csv
-# weighted by ELO win/draw/loss probabilities.
-# ══════════════════════════════════════════════════════════════
-plot_germany_matrix <- function(teams_init, hist_sd,
-                                germany_name = "Deutschland", max_g = 5) {
-
-  ger   <- teams_init %>% filter(team_name == germany_name)
-  ger_e <- ger$elo[1]
-  ger_g <- ger$group_letter[1]
-
-  opps  <- teams_init %>%
-    filter(group_letter == ger_g, team_name != germany_name)
-
-  plots <- lapply(seq_len(nrow(opps)), function(i) {
-
-    opp   <- opps[i, ]
-    opp_e <- opp$elo
-    opp_f <- get_flag(opp$fifa_code)
-
-    dist <- analytical_score_dist(ger_e, opp_e, hist_sd) %>%
-      filter(ger_goals <= max_g, opp_goals <= max_g)
-
-    grid <- expand.grid(ger_goals = 0:max_g, opp_goals = 0:max_g) %>%
-      left_join(dist, by = c("ger_goals","opp_goals")) %>%
-      mutate(
-        prob   = ifelse(is.na(prob), 0, prob),
-        result = case_when(
-          ger_goals > opp_goals ~ "WIN",
-          ger_goals < opp_goals ~ "LOSS",
-          TRUE                  ~ "DRAW"
-        ),
-        label = ifelse(prob >= 0.005,
-                       sprintf("%.1f%%", prob * 100),
-                       "<.05%")
-      )
-
-    # ---- ELO comparison ----
-    wdl <- elo_wdl(ger_e, opp_e)
-
-    # ---- heatmap ----
-    p_heat <- ggplot(grid, aes(x = ger_goals, y = opp_goals)) +
-      geom_tile(aes(fill = prob), colour = BORDER, linewidth = 0.9) +
-      geom_text(aes(label = label),
-                colour = TEXT,
-                size = 2.9,
-                fontface = "bold",
-                family = FONT) +
-      scale_fill_gradient(low = FILL_DRAW, high = LIME) +
-      scale_x_continuous(breaks = 0:max_g, expand = expansion(add = 0.52)) +
-      scale_y_continuous(breaks = 0:max_g, expand = expansion(add = 0.52)) +
-      labs(
-        title    = sprintf("Deutschland gegen %s", opp$team_name),
-        x        = "Tore Deutschland",
-        y        = sprintf("Tore %s", opp$team_name)
-      ) +
-      #theme_wc(10) +
-      theme(
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        panel.background  = element_blank(),
-        plot.background   = element_blank(),
-        legend.position   = "none"
-      )
-
-    # ---- bar plot (W/D/L) ----
-    summary_df <- data.frame(
-      WIN  = wdl$win,
-      DRAW = wdl$draw,
-      LOSS = wdl$loss
-    )
-
-    summary_df <- tidyr::pivot_longer(
-      summary_df,
-      cols = everything(),
-      names_to = "result",
-      values_to = "prob"
-    )
-
-    summary_df$result <- factor(summary_df$result,
-                                levels = c("WIN", "DRAW", "LOSS"))
-    p_bar <- ggplot(summary_df, aes(x = 1, y = prob, fill = result)) +
-      geom_col(width = 0.6) +
-      geom_text(
-        aes(label = paste0(round(prob * 100), "%")),
-        position = position_stack(vjust = 0.5),
-        size = 3,
-        colour = "black"
-      ) +
-      coord_flip() +
-      scale_fill_manual(
-        values = c("WIN" = LIME, "DRAW" = FILL_DRAW, "LOSS" = RED_LT),
-        name = NULL
-      ) +
-      #theme_wc(10) +
-      theme(
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        panel.background  = element_blank(),
-        plot.background   = element_blank(),
-        axis.text         = element_blank(),
-        axis.ticks        = element_blank(),
-        axis.title        = element_blank(),
-        legend.position   = "none"
-      )
-
-    # ---- combine ----
-    p_heat / p_bar + plot_layout(heights = c(4, 1))
-  })
-
-  wrap_plots(plots, nrow = 1) +
-    plot_annotation(
-      title = "Deutschland: Wahrscheinlichkeitsmatrix für die Gruppenphase",
-      theme = theme(
-        #plot.background = element_rect(fill = BG, colour = NA),
-        plot.title = element_text(colour = TEXT, size = 15, face = "bold",
-                                  family = FONT,
-                                  margin = margin(b = 4)),
-        plot.subtitle = element_text(colour = MUTED, size = 9, family = FONT,
-                                     margin = margin(b = 6)),
-        plot.caption = element_text(colour = MUTED, size = 8, family = FONT,
-                                    hjust = 0, margin = margin(t = 6)),
-        plot.margin = margin(20, 20, 14, 20)
-      )
-    )
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -661,6 +533,33 @@ poisson_score_dist <- function(opp_elo, germany_elo, opp_name) {
     )
 }
 
+plot_total_goals <- function(mc, top_n = 10) {
+  df <- mc$goals_df %>%
+    arrange(desc(avg_goals)) %>%
+    slice(1:top_n) %>%
+    mutate(
+      team_name = factor(team_name, levels = rev(team_name))
+    )
+  ggplot(df, aes(x = avg_goals, y = team_name)) +
+    geom_col(fill = LIME, colour = NA, width = 0.65) +
+    geom_text(aes(label = sprintf("%.2f", avg_goals)),
+              hjust = -0.12, colour = TEXT,
+              size = 3.7, fontface = "bold", family = FONT) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.22))) +
+    labs(
+      title    = "Erwartete Tore pro Team",
+      subtitle = sprintf("Die Besten %d Nationen  ·  %s Simulationen",
+                         top_n, format(mc$n_sims, big.mark = ",")),
+      x = NULL, y = NULL
+    ) +
+    theme_wc(11) +
+    theme(
+      axis.text.y        = element_text(size = 10.5, colour = TEXT, face = "bold"),
+      axis.text.x        = element_text(size = 9,    colour = MUTED),
+      panel.grid.major.y = element_blank()
+    )
+}
+
 # ══════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════
@@ -729,22 +628,6 @@ mc$reach_df$team_name       <- translate(mc$reach_df$team_name)
 mc$gwin_df$team_name        <- translate(mc$gwin_df$team_name)
 
 
-# ── Page 1: Analytical score matrix ──────────────────────────
-message("Building Germany score matrices (analytical, no simulation)...")
-p1 <- plot_germany_matrix(dat$teams_init, dat$hist_sd,
-                          germany_name = "Deutschland", max_g = 5)
-message("Saved: wc2026_germany_matrix.png")
-p1
-
-
-# ── Page 2: Monte Carlo results ──────────────────────────────
-message(sprintf("Running %d MC simulations (seed=%d)...", N_SIMS, SEED))
-# mc <- run_mc(dat$teams_init, dat$hist_sd,
-#              k = K,
-#              use_hist = USE_HIST, seed_base = SEED,
-#              n_sims = N_SIMS)
-# saveRDS(mc, "output/wc2026_mc_results.rds")
-
 message("Building simulation result plots...")
 
 opps_aux = dat$teams_init %>%
@@ -803,6 +686,15 @@ ggsave("Figures/GERWeiterkommen.png",
 p2c
 ggsave("Figures/Gruppensieger.png",
        plot   = p2c,
+       width  = 6, height = 12,
+       dpi    = 300,
+       bg     = "white")
+
+
+p2d <- plot_total_goals(mc, top_n = TOP_N)
+p2d
+ggsave("Figures/TotalGoals.png",
+       plot   = p2d,
        width  = 6, height = 12,
        dpi    = 300,
        bg     = "white")
