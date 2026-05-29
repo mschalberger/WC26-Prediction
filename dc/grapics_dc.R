@@ -411,6 +411,55 @@ plot_group_winners_dc <- function(dc_results, teams_init) {
     )
 }
 
+poisson_score_dist <- function() {
+  dc <- readRDS("dc/dc_model.rds")
+  opp_name <- "Côte d'Ivoire"
+  germany_goals <- predict_goals(dc, "17", "19", x1 = matrix(c(0, 0), ncol = 2), x2 = matrix(c(0), ncol = 1), maxgoal = 5, return_df = TRUE)
+  plot_data <- germany_goals %>%
+    pivot_longer(cols = c(goals1, goals2), names_to = "team", values_to = "goals") %>%
+    mutate(
+      team = case_when(
+        team == "goals1" ~ "Deutschland",
+        team == "goals2" ~ opp_name,
+        TRUE             ~ team
+      ),
+      team = factor(team, levels = c("Deutschland", opp_name))
+    ) %>%
+    group_by(goals, team) %>%
+    summarise(probability = sum(probability), .groups = "drop")
+
+  ggplot(plot_data, aes(x = factor(goals), y = probability, fill = team)) +
+    geom_col(
+      width = 0.7,
+      colour = BORDER,
+      linewidth = 0.4
+    ) +
+    facet_wrap(~ team, nrow = 1) +
+    scale_fill_manual(values = setNames(
+      c(LIME, RED_LT),
+      c("Deutschland", opp_name)
+    )) +
+    scale_y_continuous(
+      labels = percent_format(accuracy = 1),
+      expand = expansion(mult = c(0, 0.08))
+    ) +
+    labs(
+      title = "Poisson-Verteilung der Toranzahl",
+      subtitle = "Erwartete Tore pro Spiel basierend auf dem Dixon-Coles-Modell",
+      x = "Tore",
+      y = "Wahrscheinlichkeit"
+    ) +
+    theme_wc(9) +
+    theme(
+      legend.position = "none",
+      panel.grid.major.x = element_blank(),
+      strip.text = element_text(
+        colour = TEXT,
+        face = "bold",
+        size = 10
+      )
+    )
+}
 
 team_de <- c(
   "Mexico"                 = "Mexiko",
@@ -520,5 +569,10 @@ ggsave("Figures/TotalGoals_dc.png",
        dpi    = 300,
        bg     = "white")
 
-
+p6 <- poisson_score_dist()
+ggsave("Figures/Poisson_dc.png",
+       plot   = p6,
+       width  = 12, height = 6,
+       dpi    = 300,
+       bg     = "white")
 
