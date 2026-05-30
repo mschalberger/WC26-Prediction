@@ -952,6 +952,9 @@ server <- function(input, output, session) {
   # Ohne Parameter bleibt der Default-Reiter (ELO) aktiv.
   observe({
     q <- parseQueryString(session$clientData$url_search)
+    cat(sprintf("DEBUG url_search='%s' modell='%s'\n",
+                session$clientData$url_search, q[["modell"]]),
+        file = "/tmp/wm_debug.log", append = TRUE)
     if (identical(q[["modell"]], "dc")) {
       updateTabsetPanel(session, "prediction_model", selected = "dixon_coles")
     }
