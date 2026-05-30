@@ -948,6 +948,14 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   # ── Session-Tracking ──
+  # Deep-Link: ?modell=dc öffnet direkt den Dixon-Coles-Reiter.
+  # Ohne Parameter bleibt der Default-Reiter (ELO) aktiv.
+  observe({
+    q <- parseQueryString(session$clientData$url_search)
+    if (identical(q[["modell"]], "dc")) {
+      updateTabsetPanel(session, "prediction_model", selected = "dixon_coles")
+    }
+  })
   # Schreibt "start" beim Verbindungsaufbau und "end" beim Schließen
   # der Session in die TSV-Datei (Setup oben in der Datei).
   log_session_event("start", session$token)
