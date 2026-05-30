@@ -105,8 +105,19 @@ default_result_cache <- local({
   }
 })
 
-ui <- fluidPage(
-  tags$head(
+ui <- function(req) {
+  
+  # Reiter-Vorauswahl bereits beim Seitenaufbau (kein nachträgliches
+  # Umschalten per Websocket). ?modell=dc rendert direkt Dixon-Coles.
+  start_model <- if (identical(
+    parseQueryString(req$QUERY_STRING)[["modell"]], "dc")) {
+    "dixon_coles"
+  } else {
+    "elo"
+  }
+  
+  fluidPage(
+    tags$head(
     tags$meta(name="viewport", content="width=device-width, initial-scale=1.0"),
     tags$link(href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;600;700&display=swap", rel="stylesheet"),
     tags$style(HTML("
@@ -737,11 +748,12 @@ ui <- fluidPage(
 
       # ── EINSTELLUNGEN (permanent ausgeklappt) ───────────────────
       div(class="settings-box",
-        tabsetPanel(
-          id = "prediction_model",
-          type = "tabs",
-          tabPanel("ELO", value = "elo"),
-          tabPanel("Dixon-Coles", value = "dixon_coles")
+          tabsetPanel(
+            id = "prediction_model",
+            type = "tabs",
+            selected = start_model,
+            tabPanel("ELO", value = "elo"),
+            tabPanel("Dixon-Coles", value = "dixon_coles")
         ),
 
         # Header mit Titel links und Zurücksetzen-Button rechts in derselben Zeile.
@@ -942,23 +954,15 @@ ui <- fluidPage(
       });
     });
   "))
-)
+  )
+}
+
+# ── SERVER ───────────────────────────────────────────────────
 
 # ── SERVER ───────────────────────────────────────────────────
 
 server <- function(input, output, session) {
   # ── Session-Tracking ──
-  # Deep-Link: ?modell=dc öffnet direkt den Dixon-Coles-Reiter.
-  # Ohne Parameter bleibt der Default-Reiter (ELO) aktiv.
-  observe({
-    q <- parseQueryString(session$clientData$url_search)
-    cat(sprintf("DEBUG url_search='%s' modell='%s'\n",
-                session$clientData$url_search, q[["modell"]]),
-        file = "/tmp/wm_debug.log", append = TRUE)
-    if (identical(q[["modell"]], "dc")) {
-      updateTabsetPanel(session, "prediction_model", selected = "dixon_coles")
-    }
-  })
   # Schreibt "start" beim Verbindungsaufbau und "end" beim Schließen
   # der Session in die TSV-Datei (Setup oben in der Datei).
   log_session_event("start", session$token)
