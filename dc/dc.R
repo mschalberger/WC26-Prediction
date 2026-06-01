@@ -1,11 +1,13 @@
+
+pak::pak("jalapic/engsoccerdata")
+pak::pak("opisthokonta/goalmodel")
+
 library(devtools)
 library(Rcpp)
 library(dplyr)
 library(tidyr)
 library(stringr)
 library(readr)
-pak::pak("jalapic/engsoccerdata")
-pak::pak("opisthokonta/goalmodel")
 library(goalmodel)
 
 teams <- read.csv("data/teams.csv")
@@ -62,7 +64,7 @@ dc <- goalmodel(goals1 = test$home_score, goals2 = test$away_score,
 summary(dc)
 
 saveRDS(dc, "dc/dc_model.rds")
-#dc <- readRDS("dc/dc_model.rds")
+dc <- readRDS("dc/dc_model.rds")
 
 sourceCpp("dc/dc.cpp")
 

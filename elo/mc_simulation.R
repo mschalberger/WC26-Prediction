@@ -68,50 +68,6 @@ flag_map <- c(
 )
 get_flag <- function(code) ifelse(is.na(flag_map[code]), "🏳️", unname(flag_map[code]))
 
-# ── ELO HELPER (R — used only by analytical_score_dist) ──────
-
-elo_expected <- function(ea, eb) 1 / (1 + 10^((eb - ea) / 400))
-
-# ── ANALYTICAL SCORE DISTRIBUTION ────────────────────────────
-
-analytical_score_dist <- function(elo_ger, elo_opp, hist_sd) {
-  p_raw      <- elo_expected(elo_ger, elo_opp)
-  ger_is_fav <- (p_raw >= 0.5)
-  p_fav      <- if (ger_is_fav) p_raw else (1 - p_raw)
-
-  draw_p  <- 1/3 * exp(-((p_fav - 0.5)^2) / (2 * 0.236875^2))
-  p_fav_w <- p_fav * (1 - draw_p)
-  p_und_w <- (1 - p_fav) * (1 - draw_p)
-
-  outcome_weights <- list(
-    list(csv = "fav_win", weight = p_fav_w),
-    list(csv = "draw",    weight = draw_p),
-    list(csv = "und_win", weight = p_und_w)
-  )
-
-  rows <- lapply(outcome_weights, function(oc) {
-    if (oc$weight == 0) return(NULL)
-    bin <- hist_sd %>%
-      filter(outcome == oc$csv, p_lo <= p_fav_w, p_fav_w < p_hi)
-    if (nrow(bin) == 0)
-      bin <- hist_sd %>%
-      filter(outcome == oc$csv, p_hi == max(p_hi[outcome == oc$csv]))
-    if (nrow(bin) == 0) return(NULL)
-    bin %>%
-      mutate(
-        ger_goals  = if (ger_is_fav) fav_goals else und_goals,
-        opp_goals  = if (ger_is_fav) und_goals else fav_goals,
-        joint_prob = prob * oc$weight
-      ) %>%
-      select(ger_goals, opp_goals, joint_prob)
-  })
-
-  bind_rows(rows) %>%
-    group_by(ger_goals, opp_goals) %>%
-    summarise(prob = sum(joint_prob), .groups = "drop") %>%
-    mutate(prob = prob / sum(prob))
-}
-
 # ── FULL C++ MONTE CARLO CORE ─────────────────────────────────
 
 cppFunction('

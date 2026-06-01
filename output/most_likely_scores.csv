@@ -1,0 +1,73 @@
+"date","phase","home_code","home_name","home_elo","away_code","away_name","away_elo","home_goals","away_goals","score","outcome","best_joint_prob","p_home_win","p_draw","p_away_win"
+"2026-06-11","Group Stage","CZ","Czechia",1733,"KR","South Korea",1756,0,0,"0–0","draw",0.12084,0.3277,0.2982,0.3741
+"2026-06-11","Group Stage","MX","Mexico",1868,"ZA","South Africa",1517,2,0,"2–0","home_win",0.14397,0.7656,0.1328,0.1015
+"2026-06-12","Group Stage","CA","Canada",1784,"BA","Bosnia and Herzegovina",1591,1,0,"1–0","home_win",0.13342,0.5939,0.2106,0.1955
+"2026-06-12","Group Stage","US","United States",1733,"PY","Paraguay",1833,1,1,"1–1","draw",0.13807,0.2631,0.269,0.4679
+"2026-06-13","Group Stage","AU","Australia",1775,"TR","Turkey",1902,0,1,"0–1","away_win",0.13306,0.2427,0.253,0.5042
+"2026-06-13","Group Stage","BR","Brazil",1988,"MA","Morocco",1822,1,0,"1–0","home_win",0.15705,0.5576,0.228,0.2144
+"2026-06-13","Group Stage","HT","Haiti",1532,"SQ","Scotland",1770,0,1,"0–1","away_win",0.14626,0.1654,0.1835,0.651
+"2026-06-13","Group Stage","QA","Qatar",1423,"CH","Switzerland",1894,0,2,"0–2","away_win",0.16146,0.0559,0.1035,0.8406
+"2026-06-14","Group Stage","CW","Curaçao",1433,"DE","Germany",1925,0,2,"0–2","away_win",0.16322,0.05,0.1001,0.8498
+"2026-06-14","Group Stage","EC","Ecuador",1935,"CI","Ivory Coast",1676,2,0,"2–0","home_win",0.13754,0.6757,0.1721,0.1521
+"2026-06-14","Group Stage","JP","Japan",1906,"NL","Netherlands",1961,1,1,"1–1","draw",0.11978,0.2993,0.2899,0.4108
+"2026-06-14","Group Stage","SE","Sweden",1719,"TN","Tunisia",1636,1,1,"1–1","draw",0.14265,0.4457,0.2779,0.2764
+"2026-06-15","Group Stage","BE","Belgium",1867,"EG","Egypt",1699,1,0,"1–0","home_win",0.15782,0.5603,0.2267,0.213
+"2026-06-15","Group Stage","CV","Cape Verde",1576,"ES","Spain",2165,0,2,"0–2","away_win",0.17972,0.0297,0.0891,0.8812
+"2026-06-15","Group Stage","IR","Iran",1764,"NZ","New Zealand",1585,1,0,"1–0","home_win",0.16201,0.5752,0.2196,0.2053
+"2026-06-15","Group Stage","SA","Saudi Arabia",1566,"UY","Uruguay",1892,0,2,"0–2","away_win",0.13994,0.1139,0.1418,0.7442
+"2026-06-16","Group Stage","DZ","Algeria",1743,"AR","Argentina",2113,0,2,"0–2","away_win",0.14675,0.0928,0.1268,0.7805
+"2026-06-16","Group Stage","AT","Austria",1827,"JO","Jordan",1685,1,0,"1–0","home_win",0.13847,0.5247,0.2436,0.2317
+"2026-06-16","Group Stage","FR","France",2081,"SN","Senegal",1866,1,0,"1–0","home_win",0.13984,0.6225,0.197,0.1806
+"2026-06-16","Group Stage","IQ","Iraq",1608,"NO","Norway",1912,0,2,"0–2","away_win",0.13604,0.1257,0.1508,0.7235
+"2026-06-17","Group Stage","CO","Colombia",1975,"UZ","Uzbekistan",1727,2,0,"2–0","home_win",0.13494,0.663,0.178,0.159
+"2026-06-17","Group Stage","HR","Croatia",1930,"EN","England",2020,1,1,"1–1","draw",0.14083,0.2709,0.2744,0.4547
+"2026-06-17","Group Stage","CD","DR Congo",1655,"PT","Portugal",1984,0,2,"0–2","away_win",0.14044,0.1124,0.1407,0.7469
+"2026-06-17","Group Stage","GH","Ghana",1503,"PA","Panama",1733,0,1,"0–1","away_win",0.14407,0.1706,0.1881,0.6413
+"2026-06-18","Group Stage","BA","Bosnia and Herzegovina",1591,"CH","Switzerland",1894,0,2,"0–2","away_win",0.13586,0.1263,0.1512,0.7225
+"2026-06-18","Group Stage","CA","Canada",1784,"QA","Qatar",1423,2,0,"2–0","home_win",0.14546,0.7736,0.1296,0.0968
+"2026-06-18","Group Stage","CZ","Czechia",1733,"ZA","South Africa",1517,1,0,"1–0","home_win",0.14013,0.6237,0.1964,0.1799
+"2026-06-18","Group Stage","MX","Mexico",1868,"KR","South Korea",1756,1,0,"1–0","home_win",0.12769,0.4839,0.2621,0.254
+"2026-06-19","Group Stage","BR","Brazil",1988,"HT","Haiti",1532,2,0,"2–0","home_win",0.16008,0.8335,0.1061,0.0604
+"2026-06-19","Group Stage","MA","Morocco",1822,"SQ","Scotland",1770,1,1,"1–1","draw",0.12021,0.4072,0.2909,0.3019
+"2026-06-19","Group Stage","PY","Paraguay",1833,"TR","Turkey",1902,1,1,"1–1","draw",0.11751,0.2877,0.2844,0.4279
+"2026-06-19","Group Stage","US","United States",1733,"AU","Australia",1775,1,1,"1–1","draw",0.12149,0.3105,0.294,0.3954
+"2026-06-20","Group Stage","CW","Curaçao",1433,"EC","Ecuador",1935,0,2,"0–2","away_win",0.16399,0.0475,0.0987,0.8538
+"2026-06-20","Group Stage","DE","Germany",1925,"CI","Ivory Coast",1676,2,0,"2–0","home_win",0.13518,0.6641,0.1775,0.1584
+"2026-06-20","Group Stage","JP","Japan",1906,"TN","Tunisia",1636,2,0,"2–0","home_win",0.14005,0.6881,0.1665,0.1454
+"2026-06-20","Group Stage","NL","Netherlands",1961,"SE","Sweden",1719,2,0,"2–0","home_win",0.13349,0.6558,0.1813,0.1629
+"2026-06-21","Group Stage","BE","Belgium",1867,"IR","Iran",1764,1,1,"1–1","draw",0.13721,0.4719,0.2673,0.2608
+"2026-06-21","Group Stage","CV","Cape Verde",1576,"UY","Uruguay",1892,0,2,"0–2","away_win",0.13821,0.1192,0.1458,0.735
+"2026-06-21","Group Stage","EG","Egypt",1699,"NZ","New Zealand",1585,1,0,"1–0","home_win",0.1284,0.4866,0.261,0.2524
+"2026-06-21","Group Stage","SA","Saudi Arabia",1566,"ES","Spain",2165,0,2,"0–2","away_win",0.18021,0.0281,0.0883,0.8836
+"2026-06-22","Group Stage","DZ","Algeria",1743,"JO","Jordan",1685,1,1,"1–1","draw",0.11933,0.4144,0.2888,0.2968
+"2026-06-22","Group Stage","AR","Argentina",2113,"AT","Austria",1827,2,0,"2–0","home_win",0.14355,0.7053,0.1588,0.1359
+"2026-06-22","Group Stage","FR","France",2081,"IQ","Iraq",1608,2,0,"2–0","home_win",0.16163,0.8416,0.1032,0.0553
+"2026-06-22","Group Stage","NO","Norway",1912,"SN","Senegal",1866,1,1,"1–1","draw",0.12101,0.4001,0.2929,0.307
+"2026-06-23","Group Stage","CO","Colombia",1975,"CD","DR Congo",1655,2,0,"2–0","home_win",0.13891,0.7388,0.1442,0.1171
+"2026-06-23","Group Stage","HR","Croatia",1930,"PA","Panama",1733,1,0,"1–0","home_win",0.1346,0.5991,0.2081,0.1928
+"2026-06-23","Group Stage","EN","England",2020,"GH","Ghana",1503,2,0,"2–0","home_win",0.1753,0.8595,0.0967,0.0438
+"2026-06-23","Group Stage","PT","Portugal",1984,"UZ","Uzbekistan",1727,2,0,"2–0","home_win",0.13707,0.6734,0.1732,0.1534
+"2026-06-24","Group Stage","BA","Bosnia and Herzegovina",1591,"QA","Qatar",1423,1,0,"1–0","home_win",0.15782,0.5603,0.2267,0.213
+"2026-06-24","Group Stage","BR","Brazil",1988,"SQ","Scotland",1770,1,0,"1–0","home_win",0.1407,0.6263,0.1952,0.1785
+"2026-06-24","Group Stage","CA","Canada",1784,"CH","Switzerland",1894,0,1,"0–1","away_win",0.12698,0.2555,0.2633,0.4812
+"2026-06-24","Group Stage","HT","Haiti",1532,"MA","Morocco",1822,0,2,"0–2","away_win",0.1444,0.1336,0.1569,0.7094
+"2026-06-24","Group Stage","MX","Mexico",1868,"CZ","Czechia",1733,1,0,"1–0","home_win",0.13594,0.5151,0.248,0.2368
+"2026-06-24","Group Stage","ZA","South Africa",1517,"KR","South Korea",1756,0,1,"0–1","away_win",0.14653,0.1648,0.183,0.6522
+"2026-06-25","Group Stage","AU","Australia",1775,"PY","Paraguay",1833,1,1,"1–1","draw",0.11933,0.2968,0.2888,0.4144
+"2026-06-25","Group Stage","CW","Curaçao",1433,"CI","Ivory Coast",1676,0,2,"0–2","away_win",0.13374,0.1622,0.1807,0.657
+"2026-06-25","Group Stage","EC","Ecuador",1935,"DE","Germany",1925,0,0,"0–0","draw",0.12143,0.3602,0.2997,0.3401
+"2026-06-25","Group Stage","JP","Japan",1906,"SE","Sweden",1719,1,0,"1–0","home_win",0.16503,0.5859,0.2144,0.1997
+"2026-06-25","Group Stage","NL","Netherlands",1961,"TN","Tunisia",1636,2,0,"2–0","home_win",0.13977,0.7433,0.1422,0.1145
+"2026-06-25","Group Stage","US","United States",1733,"TR","Turkey",1902,0,1,"0–1","away_win",0.1582,0.2123,0.2261,0.5616
+"2026-06-26","Group Stage","BE","Belgium",1867,"NZ","New Zealand",1585,2,0,"2–0","home_win",0.1427,0.7011,0.1607,0.1383
+"2026-06-26","Group Stage","CV","Cape Verde",1576,"SA","Saudi Arabia",1566,0,0,"0–0","draw",0.12143,0.3602,0.2997,0.3401
+"2026-06-26","Group Stage","EG","Egypt",1699,"IR","Iran",1764,1,1,"1–1","draw",0.11821,0.2909,0.2861,0.423
+"2026-06-26","Group Stage","FR","France",2081,"NO","Norway",1912,1,0,"1–0","home_win",0.1582,0.5616,0.2261,0.2123
+"2026-06-26","Group Stage","IQ","Iraq",1608,"SN","Senegal",1866,0,2,"0–2","away_win",0.13731,0.1528,0.1727,0.6746
+"2026-06-26","Group Stage","ES","Spain",2165,"UY","Uruguay",1892,2,0,"2–0","home_win",0.14072,0.6914,0.165,0.1436
+"2026-06-27","Group Stage","DZ","Algeria",1743,"AT","Austria",1827,1,1,"1–1","draw",0.1424,0.2756,0.2775,0.447
+"2026-06-27","Group Stage","AR","Argentina",2113,"JO","Jordan",1685,2,0,"2–0","home_win",0.15722,0.8186,0.1118,0.0697
+"2026-06-27","Group Stage","CO","Colombia",1975,"PT","Portugal",1984,0,0,"0–0","draw",0.12146,0.3411,0.2997,0.3592
+"2026-06-27","Group Stage","HR","Croatia",1930,"GH","Ghana",1503,2,0,"2–0","home_win",0.15711,0.818,0.112,0.07
+"2026-06-27","Group Stage","CD","DR Congo",1655,"UZ","Uzbekistan",1727,1,1,"1–1","draw",0.14529,0.2852,0.2831,0.4317
+"2026-06-27","Group Stage","EN","England",2020,"PA","Panama",1733,2,0,"2–0","home_win",0.14377,0.7063,0.1583,0.1354

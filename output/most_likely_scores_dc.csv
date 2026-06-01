@@ -1,0 +1,56 @@
+"team1","team2","goals1","goals2","probability"
+"Czechia","South Korea",1,1,0.111263241540642
+"Mexico","South Africa",1,0,0.145358446111174
+"Canada","Bosnia and Herzegovina",1,1,0.0993772047271105
+"Australia","Turkey",1,1,0.132033879505068
+"Brazil","Morocco",1,1,0.134396765236546
+"Haiti","Scotland",0,2,0.140324196187497
+"Qatar","Switzerland",0,3,0.10520051626759
+"Curaçao","Germany",0,3,0.125529865559002
+"Japan","Netherlands",1,1,0.123510775349646
+"Sweden","Tunisia",1,1,0.123747536932524
+"Belgium","Egypt",1,0,0.129334658533958
+"Saudi Arabia","Uruguay",0,1,0.198625442331852
+"Algeria","Argentina",0,2,0.129124844386464
+"Austria","Jordan",1,0,0.134900965877011
+"France","Senegal",2,1,0.0993979258722436
+"Iraq","Norway",0,2,0.132159970802486
+"Colombia","Uzbekistan",2,0,0.117774389119755
+"Croatia","England",0,1,0.118341965675458
+"DR Congo","Portugal",0,2,0.117071143441549
+"Ghana","Panama",1,1,0.130119939995025
+"Bosnia and Herzegovina","Switzerland",1,3,0.0818980380644009
+"Canada","Qatar",1,1,0.112057383855206
+"Czechia","South Africa",1,0,0.151660336701838
+"Mexico","South Korea",1,1,0.106639957759265
+"Brazil","Haiti",1,0,0.215266803329395
+"Morocco","Scotland",1,2,0.0931269211956456
+"Paraguay","Turkey",0,1,0.138370774939834
+"Curaçao","Ecuador",0,1,0.180494895340708
+"Japan","Tunisia",1,1,0.125535542487853
+"Netherlands","Sweden",2,1,0.0949721137117704
+"Algeria","Jordan",0,0,0.217438181791155
+"Argentina","Austria",1,0,0.166274111625553
+"France","Iraq",2,0,0.142613202832321
+"Norway","Senegal",1,1,0.102503211068349
+"Colombia","DR Congo",2,0,0.128371942170574
+"Croatia","Panama",0,1,0.142127979726551
+"England","Ghana",2,0,0.163977926426609
+"Portugal","Uzbekistan",2,0,0.112807538694445
+"Bosnia and Herzegovina","Qatar",1,1,0.137039370538611
+"Brazil","Scotland",1,2,0.0953678098615473
+"Canada","Switzerland",1,3,0.0669681993743913
+"Haiti","Morocco",0,1,0.190985841770859
+"Mexico","Czechia",1,1,0.121391448399314
+"South Africa","South Korea",1,1,0.119465520864448
+"Japan","Sweden",1,1,0.124430003407064
+"Netherlands","Tunisia",2,1,0.0958159245324611
+"France","Norway",2,2,0.0704555631452904
+"Iraq","Senegal",0,1,0.183755282166617
+"Spain","Uruguay",1,1,0.100985639792638
+"Algeria","Austria",0,0,0.24458173369294
+"Argentina","Jordan",1,0,0.147173426165074
+"Colombia","Portugal",1,2,0.0711621868968833
+"Croatia","Ghana",0,0,0.243995789083288
+"DR Congo","Uzbekistan",0,0,0.196699883990969
+"England","Panama",2,1,0.0983903902899597
