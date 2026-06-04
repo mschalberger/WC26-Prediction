@@ -1,0 +1,41 @@
+Unsere Prognose schätzt für jedes mögliche WM-Spiel, wie viele Tore beide Mannschaften erzielen werden, und leitet daraus ab, wie wahrscheinlich ein Sieg, ein Unentschieden oder eine Niederlage ist. Dabei betrachten wir nicht nur die bisherigen Ergebnisse, sondern auch die Spielweise der Mannschaften: wie viele Chancen sie hatten, wie gefährlich ihre Schüsse waren und wie dominant sie den Ball kontrollierten. Das Modell basiert auf einem Verfahren des maschinellen Lernens namens „Random Forest“ und lernt aus Tausenden vergangenen Länderspielen selbstständig, welche Merkmale einer Mannschaft am besten verraten, wie viele Tore sie im nächsten Spiel erzielen wird.
+
+Schritt 1: Datengrundlage
+Grundlage sind alle verfügbaren Länderspiele der A-Nationalmannschaften der Männer mit bekanntem Endstand. Spiele ohne Ergebnis, Nachwuchs- und Frauenpartien sowie nicht-internationale Begegnungen sind ausgeschlossen. Die Daten stammen von Sofascore und wurden per Web Scraping automatisiert ausgelesen. Dabei betrachten wir neben dem Endergebnis, auch 33 detaillierte Statistiken pro Spiel und Mannschaft, darunter Schüsse aufs Tor, Ballbesitz, erwartete Tore (xG), Eckbälle, gewonnene Zweikämpfe, Passquoten, Großchancen und vieles mehr. Der Grund: Das nackte Ergebnis erzählt nur einen Teil der Geschichte. Eine Mannschaft, die ein Spiel klar dominiert, sich viele Großchancen erarbeitet und am Ende trotzdem unglücklich mit 0:1 verliert, ist in Wahrheit stärker, als es das Ergebnis vermuten lässt. Zusätzlich geben wir der Mannschaft zwei bewährte Stärkemaße mit: die Elo-Zahl (TODO: ADD LINK) und den durchschnittlichen Marktwert des Kaders. Um die aktuelle Form des Teams darzustellen, betrachten wir die Durchschnittswerte der letzten 15 Partien aus diesen Statistiken.
+
+Schritt 2: Random Forest 
+2.1: Decision Trees
+Ein Entscheidungsbaum ist eine Abfolge von Ja/Nein-Fragen zu den Merkmalen einer Begegnung, zum Beispiel: „Ist die Elo-Differenz größer als 50?” oder „Lag der gegnerische xG-Schnitt unter 1,2?” Am Ende dieser Kette steht ein Schätzwert, der angibt, wie viele Tore Mannschaften in genau dieser Merkmalskombination in der Vergangenheit im Durchschnitt erzielt haben. Die Fragen und Schwellenwerte lernt der Baum selbstständig aus den Trainingsdaten.
+2.2: Random Forest
+Ein einzelner Baum neigt jedoch dazu, Zufälligkeiten der Trainingsdaten zu überanpassen. Deshalb werden 500 Bäume trainiert, wobei jeder auf einer zufälligen Stichprobe der Spiele basiert und bei jeder Verzweigung mit einer zufälligen Teilmenge der Merkmale arbeitet, wodurch sich Ausreißer ausgleichen und das Ergebnis robuster wird als bei jedem einzelnen Baum.
+2.3: Poisson-Verteilung
+Pro Spiel werden zwei Wälder eingesetzt: Einer schätzt die Tore der Mannschaft A, der andere die der Mannschaft B. Aus diesen beiden erwarteten Torzahlen werden über eine Poisson-Verteilung die Wahrscheinlichkeiten für jeden möglichen Endstand berechnet. Aufsummiert ergeben sich daraus die Wahrscheinlichkeiten für Sieg, Unentschieden und Niederlage. Für Spiele im eigenen Land erhalten USA, Kanada und Mexiko einen Heimvorteilbonus von 100 Elo-Punkten bei der Berechnung der erwarteten Tore. 
+
+Schritt 3: Turniersimuation
+3.1: Gruppenphase
+Die 48 Mannschaften sind in 12 Gruppen zu je 4 Mannschaften eingeteilt. Jede Mannschaft spielt gegen die drei anderen ihrer Gruppe, das ergibt 6 Spiele pro Gruppe und insgesamt 72 Gruppenspiele. Für jedes Spiel wird aus der zugehörigen Ergebnis-Matrix ein konkreter Endstand zufällig gezogen, entsprechend der dort hinterlegten Wahrscheinlichkeiten. Es gibt drei Punkte für einen Sieg, einen Punkt für ein Unentschieden und keinen Punkt für eine Niederlage.
+3.2: Gruppentabelle aufstellen
+Nach den sechs Spielen einer Gruppe wird die Tabelle gebildet. Bei Punktgleichheit entscheidet zuerst die Tordifferenz, dann die Zahl der erzielten Tore; bleibt es danach gleich, entscheidet bei uns eine Zufallsauswahl, da wir beiispielsweise Gelbe Karten nicht simulieren. Pro Gruppe qualifizieren sich der Erste und der Zweite direkt für die K.O.-Runde.
+3.3: Die acht besten Gruppendritten ermitteln
+Insgesamt ziehen 32 Mannschaften ins Sechzehntelfinale ein. Neben den 24 direkt Qualifizierten werden also noch 8 weitere Mannschaften. Diese gehen an die 8 besten Drittplatzierten aller 12 Gruppen. Verglichen werden zuerst die Punkte, dann die Tordifferenz, dann die erzielten Tore.
+3.4: K.O.-Runde durchspielen
+Ab dem Sechzehntelfinale geht es im Ausscheidungsmodus weiter: Sechzehntelfinale, Achtelfinale, Viertelfinale, Halbfinale  und Finale. Jedes K.O.-Spiel wird wie ein Gruppenspiel aus der Ergebnis-Matrix gezogen. Endet ein Spiel unentschieden, muss eine Entscheidung fallen: Das Elfmeterschießen wird abgeschwächt anhand der Spielstärke entschieden.
+Aus der Ergebnis-Matrix wird die Sieg-Wahrscheinlichkeit p der einen Mannschaft (ohne Unentschieden) bestimmt; die Wahrscheinlichkeit, dass sie das Elfmeterschießen gewinnt, ist dann pElfmeter = 0,5 + (p − 0,5) / 2. Bei gleich starken Mannschaften bleibt es damit bei 50:50, bei einem klaren Favoriten steigt seine Wahrscheinlichkeit auf höchstens 75 Prozent.
+
+Schritt 5: Monte Carlo Simulation
+Ein einzelnes durchgespieltes Turnier ist nur eine Zufallsziehung von unendlich vielen. Eine belastbare Aussage entsteht erst durch viele Wiederholungen. Wir simulieren das gesamte Turnier daher 100.000 mal. Für jede Mannschaft zählen wir, in wie vielen dieser Turniere sie eine bestimmte Runde erreicht. Der Anteil der Turniere, in denen eine Mannschaft eine Runde erreicht, ist ihre geschätzte Wahrscheinlichkeit für diese Runde.
+
+Schritt 6: Prognose anzeigen
+Am Ende erhalten wir für jede der 48 Mannschaften die Wahrscheinlichkeit, Gruppensieger zu werden, das Sechzehntelfinale, Achtelfinale, Viertelfinale, Halbfinale und Finale zu erreichen sowie Weltmeister zu werden. Diese Wahrscheinlichkeiten bilden unsere offizielle Prognose.
+
+Worin sich Prognose und Simulation unterscheiden
+Die interaktive Simulation arbeitet mit der Elo-Zahl und ermöglicht die freie Einstellung zahlreicher Parameter. Sie ist zum Ausprobieren und Verstehen gedacht. Die Prognose hingegen arbeitet mit dem Random-Forest-Modell, schätzt Tore und Gegentore jeder Mannschaft direkt aus einer Vielzahl historischer Statistiken und weiterer Daten wie Marktwerten. Dabei wird die Wichtigkeit der einzelnen Daten vom Modell selbst ermittelt. Eine Prognose verfügt über keine einstellbaren Regler und ist auf eine möglichst belastbare Vorhersage ausgelegt.
+
+Hinweis zur Interpretation
+Auch eine sorgfältig geschätzte Prognose bleibt eine Wahrscheinlichkeitsaussage und stellt keine Vorhersage des tatsächlichen Verlaufs dar. Dass eine Mannschaft als Favorit gilt, bedeutet nicht, dass sie gewinnen wird. Fußball lebt gerade von den Überraschungen, die das Modell als seltene, aber durchaus mögliche Welten abbildet. Das Modell kennt zudem nur die Ergebnisse vergangener Spiele: Verletzungen, Kaderveränderungen, Tagesform oder Trainerwechsel kann es nur insoweit berücksichtigen, wie sie sich bereits in jüngeren Resultaten niedergeschlagen haben.
+
+
+
+
+
+
