@@ -8,3 +8,6 @@ data/logs/*
 /elo/recording.log
 /elo/report.html
 /elo/recording_v2.log
+data/all_international_matches.csv
+data/all_international_matches_lineups.csv
+data/player_market_values.csv
